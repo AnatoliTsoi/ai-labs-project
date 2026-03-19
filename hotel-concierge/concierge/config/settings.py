@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     hotel_lng: float = 2.3522
 
     # Request timeout — covers the entire 4-agent pipeline (LLM + API calls)
-    request_timeout_seconds: int = 120
+    request_timeout_seconds: int = 300
 
     # Budget controls
     max_api_cost_per_session_usd: float = 0.50
@@ -32,7 +32,9 @@ class Settings(BaseSettings):
 
     # ADK model
     gemini_model: str = "gemini-2.5-flash"
-    max_loop_iterations: int = 5
+    # The pipeline is one-shot: profile is fully provided upfront, so one pass
+    # through intake→discovery→route_planner→presenter is all that's needed.
+    max_loop_iterations: int = 1
 
     # Per-agent model overrides (empty string → falls back to gemini_model)
     intake_model: str = ""

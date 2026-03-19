@@ -134,7 +134,7 @@ const mockDayPlan: DayPlan = {
 
 // ── API client ─────────────────────────────────────────────
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false';
+const USE_MOCK = false
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000';
 
 /**
@@ -164,6 +164,11 @@ export async function submitProfile(
   }
 
   const data = await response.json();
+
+  if (!data.day_plan) {
+    throw new Error(data.error || 'Agent did not produce a day plan. Please try again.');
+  }
+
   return data.day_plan;
 }
 

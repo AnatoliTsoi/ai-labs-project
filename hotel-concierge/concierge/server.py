@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import date
 from pathlib import Path
@@ -22,7 +23,41 @@ from concierge.agents.orchestrator import build_concierge_orchestrator
 from concierge.config.settings import get_settings
 from concierge.tools.state_tools import KEY_CURRENT_PLAN
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
+    force=True,
+)
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ADK event logging helper
+# ---------------------------------------------------------------------------
+
+
+def _log_adk_event(event, elapsed: float) -> None:
+    """Emit a structured log line for each ADK event."""
+    author = getattr(event, "author", "?")
+    prefix = f"[{elapsed:6.1f}s] {author}"
+
+    if not event.content or not event.content.parts:
+        return
+
+    for part in event.content.parts:
+        if hasattr(part, "function_call") and part.function_call:
+            fc = part.function_call
+            args_preview = str(fc.args)[:120]
+            logger.info("%s  ▶ TOOL CALL  %s(%s)", prefix, fc.name, args_preview)
+        elif hasattr(part, "function_response") and part.function_response:
+            fr = part.function_response
+            resp_preview = str(fr.response)[:120]
+            logger.info("%s  ◀ TOOL RESP  %s → %s", prefix, fr.name, resp_preview)
+        elif part.text:
+            text_preview = part.text[:200].replace("\n", " ")
+            logger.info("%s  TEXT  %s", prefix, text_preview)
+
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
@@ -61,15 +96,10 @@ app = FastAPI(title=f"{settings.hotel_name} Concierge API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",    # Vite dev server
-        "http://localhost:4173",    # Vite preview
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:4173",
-    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["content-type", "x-session-id"],
 )
 
 # Build the orchestrator and runner once at startup
@@ -193,6 +223,14 @@ async def create_plan(
     session_id = f"session-{uuid.uuid4().hex}"
     user_id = f"user-{uuid.uuid4().hex[:8]}"
 
+    logger.info(
+        "POST /plan  session=%s  interests=%s  pace=%s  budget=%s",
+        session_id[:16],
+        body.profile.interests,
+        body.profile.pace,
+        body.profile.budget_level,
+    )
+
     profile_dict = _profile_to_state_dict(body.profile, session_id)
 
     today = date.today().isoformat()
@@ -226,6 +264,8 @@ async def create_plan(
 
         # Run the full orchestrator loop with a hard deadline
         last_text = ""
+        run_start = time.monotonic()
+        logger.info("[  0.0s] ── concierge pipeline START ──────────────────────────────")
         try:
             async with asyncio.timeout(settings.request_timeout_seconds):
                 async for event in runner.run_async(
@@ -233,18 +273,26 @@ async def create_plan(
                     session_id=session.id,
                     new_message=message,
                 ):
+                    elapsed = time.monotonic() - run_start
+                    _log_adk_event(event, elapsed)
                     if event.content and event.content.parts:
                         for part in event.content.parts:
                             if part.text:
                                 last_text = part.text
         except TimeoutError:
+            elapsed = time.monotonic() - run_start
             logger.error(
-                "Orchestrator timed out after %ds", settings.request_timeout_seconds
+                "[%5.1fs] Orchestrator timed out after %ds",
+                elapsed,
+                settings.request_timeout_seconds,
             )
             raise HTTPException(
                 status_code=504,
                 detail=f"Plan generation timed out after {settings.request_timeout_seconds}s",
             )
+
+        elapsed = time.monotonic() - run_start
+        logger.info("[%5.1fs] ── concierge pipeline END ────────────────────────────────", elapsed)
 
         # Re-fetch session to get the latest state after the run
         session = await runner.session_service.get_session(

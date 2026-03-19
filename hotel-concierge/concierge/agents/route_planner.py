@@ -3,6 +3,7 @@ from pathlib import Path
 from google.adk.agents import LlmAgent
 
 from concierge.config.settings import get_settings
+from concierge.tools.map_url import generate_map_url_from_stops_dict
 from concierge.tools.routes import check_opening_hours, compute_route
 from concierge.tools.state_tools import save_day_plan
 
@@ -22,6 +23,7 @@ def build_route_planner_agent() -> LlmAgent:
         tools=[
             compute_route,
             check_opening_hours,
+            generate_map_url_from_stops_dict,
             save_day_plan,
         ],
     )

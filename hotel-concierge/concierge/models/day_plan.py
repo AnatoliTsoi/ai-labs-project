@@ -63,6 +63,7 @@ class DayPlan:
     estimated_total_cost: str
     weather_contingency: str
     back_at_hotel_by: str
+    map_url: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +73,7 @@ class DayPlan:
             "estimated_total_cost": self.estimated_total_cost,
             "weather_contingency": self.weather_contingency,
             "back_at_hotel_by": self.back_at_hotel_by,
+            "map_url": self.map_url,
         }
 
     @staticmethod
@@ -83,4 +85,5 @@ class DayPlan:
             estimated_total_cost=data["estimated_total_cost"],
             weather_contingency=data.get("weather_contingency", ""),
             back_at_hotel_by=data["back_at_hotel_by"],
+            map_url=data.get("map_url", ""),
         )

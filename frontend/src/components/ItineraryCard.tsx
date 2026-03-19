@@ -9,12 +9,27 @@ interface ItineraryCardProps {
 const categoryIcons: Record<string, string> = {
   restaurant: '🍽️',
   cafe: '☕',
+  coffee_shop: '☕',
   attraction: '🏛️',
   museum: '🎨',
+  art_museum: '🎨',
+  history_museum: '🏛️',
   park: '🌿',
   activity: '⚡',
   nightlife: '🌙',
+  bar: '🍸',
+  french_restaurant: '🍽️',
+  vegetarian_restaurant: '🥗',
+  vegan_restaurant: '🥗',
+  italian_restaurant: '🍕',
+  asian_restaurant: '🍜',
+  shopping_mall: '🛍️',
+  spa: '💆',
 };
+
+function formatCategory(raw: string): string {
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 const travelModeIcons: Record<string, string> = {
   walking: '🚶',
@@ -67,7 +82,7 @@ export function ItineraryCard({ stop, isLast }: ItineraryCardProps) {
                 <span>{place.rating}</span>
               </span>
               <span className="itin-card__price">{priceDots(place.price_level)}</span>
-              <span className="itin-card__category">{place.category}</span>
+              <span className="itin-card__category">{formatCategory(place.category)}</span>
             </div>
             <p className="itin-card__address">{place.address}</p>
             {notes && <p className="itin-card__notes">{notes}</p>}

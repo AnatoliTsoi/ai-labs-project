@@ -67,6 +67,7 @@ export type FeedbackActionType =
   | 'change_time'
   | 'add_activity'
   | 'remove_stop'
+  | 'change_pace'
   | 'restart';
 
 export interface FeedbackAction {
