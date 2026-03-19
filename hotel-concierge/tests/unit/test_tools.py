@@ -10,7 +10,7 @@ from concierge.tools.places import (
     save_discovered_options,
     search_nearby_places,
 )
-from concierge.tools.routes import check_opening_hours, compute_route, get_travel_time
+from concierge.tools.routes import _is_open_at, check_opening_hours, compute_route, get_travel_time
 from concierge.tools.state_tools import (
     KEY_CURRENT_PLAN,
     KEY_DISCOVERED_OPTIONS,
@@ -172,12 +172,64 @@ class TestGetTravelTime:
         assert result > 0
 
 
+class TestIsOpenAt:
+    """Unit tests for the schedule-based _is_open_at helper."""
+
+    def _period(self, open_day: int, open_h: int, close_day: int, close_h: int) -> dict:
+        return {
+            "open": {"day": open_day, "hour": open_h, "minute": 0},
+            "close": {"day": close_day, "hour": close_h, "minute": 0},
+        }
+
+    def test_no_periods_returns_true(self) -> None:
+        assert _is_open_at({}, "12:00") is True
+
+    def test_within_hours_returns_true(self) -> None:
+        import datetime
+        today_api = (datetime.date.today().weekday() + 1) % 7
+        hours = {"periods": [self._period(today_api, 9, today_api, 22)]}
+        assert _is_open_at(hours, "12:00") is True
+
+    def test_before_open_returns_false(self) -> None:
+        import datetime
+        today_api = (datetime.date.today().weekday() + 1) % 7
+        hours = {"periods": [self._period(today_api, 11, today_api, 22)]}
+        assert _is_open_at(hours, "09:00") is False
+
+    def test_after_close_returns_false(self) -> None:
+        import datetime
+        today_api = (datetime.date.today().weekday() + 1) % 7
+        hours = {"periods": [self._period(today_api, 9, today_api, 17)]}
+        assert _is_open_at(hours, "18:00") is False
+
+    def test_wrong_day_returns_false(self) -> None:
+        import datetime
+        tomorrow_api = (datetime.date.today().weekday() + 2) % 7
+        hours = {"periods": [self._period(tomorrow_api, 9, tomorrow_api, 22)]}
+        assert _is_open_at(hours, "12:00") is False
+
+    def test_invalid_arrival_time_returns_true(self) -> None:
+        assert _is_open_at({"periods": [{"open": {"day": 1}}]}, "bad") is True
+
+
 class TestCheckOpeningHours:
     @patch("concierge.tools.routes.httpx.AsyncClient")
-    async def test_midday_is_open(self, mock_cls) -> None:
+    async def test_uses_arrival_time_not_openNow(self, mock_cls) -> None:
+        """API response uses regularOpeningHours; result reflects arrival_time."""
+        import datetime
+        today_api = (datetime.date.today().weekday() + 1) % 7
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"currentOpeningHours": {"openNow": True}}
+        resp.json.return_value = {
+            "regularOpeningHours": {
+                "periods": [
+                    {
+                        "open": {"day": today_api, "hour": 9, "minute": 0},
+                        "close": {"day": today_api, "hour": 22, "minute": 0},
+                    }
+                ]
+            }
+        }
         mock_cls.return_value = _async_client_mock(resp)
         result = await check_opening_hours("p-001", "12:00")
         assert result["is_open"] is True

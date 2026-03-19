@@ -4,6 +4,7 @@ Uses the Routes API REST endpoint:
 - POST https://routes.googleapis.com/directions/v2:computeRoutes
 """
 
+import datetime
 import logging
 import os
 
@@ -154,6 +155,47 @@ async def get_travel_time(
     return result["duration_minutes"]
 
 
+def _is_open_at(regular_hours: dict, arrival_time: str) -> bool:
+    """Return True if a place is open at arrival_time on the current weekday.
+
+    Uses regularOpeningHours.periods where day 0=Sunday … 6=Saturday.
+    Returns True (assume open) when no period data is available.
+    """
+    periods = regular_hours.get("periods", [])
+    if not periods:
+        return True  # No schedule data → assume open
+
+    try:
+        hour, minute = (int(x) for x in arrival_time.split(":"))
+    except (ValueError, AttributeError):
+        return True
+
+    arrival_min = hour * 60 + minute
+
+    # Python weekday: 0=Mon … 6=Sun → Places API: 0=Sun, 1=Mon … 6=Sat
+    api_day = (datetime.date.today().weekday() + 1) % 7
+
+    for period in periods:
+        open_info = period.get("open", {})
+        close_info = period.get("close", {})
+        if open_info.get("day") != api_day:
+            continue
+        open_min = open_info.get("hour", 0) * 60 + open_info.get("minute", 0)
+        # A missing close means open 24 h from this period
+        if not close_info:
+            return True
+        close_day = close_info.get("day", api_day)
+        close_min = close_info.get("hour", 23) * 60 + close_info.get("minute", 59)
+        if close_day != api_day:
+            # Spans midnight — any time from open until EOD counts as open
+            if arrival_min >= open_min:
+                return True
+        elif open_min <= arrival_min <= close_min:
+            return True
+
+    return False
+
+
 async def check_opening_hours(
     place_id: str,
     arrival_time: str,
@@ -173,11 +215,11 @@ async def check_opening_hours(
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 url,
-                headers=_google_headers("currentOpeningHours"),
+                headers=_google_headers("regularOpeningHours"),
             )
         resp.raise_for_status()
         data = resp.json()
-        is_open = data.get("currentOpeningHours", {}).get("openNow", True)
+        is_open = _is_open_at(data.get("regularOpeningHours", {}), arrival_time)
         return {
             "place_id": place_id,
             "arrival_time": arrival_time,
