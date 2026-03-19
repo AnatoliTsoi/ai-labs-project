@@ -21,7 +21,7 @@ def build_concierge_orchestrator() -> LoopAgent:
             "Orchestrates the hotel concierge pipeline: collect preferences → "
             "discover places → build route → present plan."
         ),
-        max_iterations=1,
+        max_iterations=settings.max_loop_iterations,
         sub_agents=[
             build_intake_agent(),
             build_discovery_agent(),
