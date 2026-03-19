@@ -1,6 +1,7 @@
 pyproject.toml
 concierge/__init__.py
 concierge/app.py
+concierge/server.py
 concierge/agents/__init__.py
 concierge/agents/discovery.py
 concierge/agents/intake.py

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     place_details_cache_ttl_seconds: int = 86400
 
     # ADK model
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-2.5-flash"
     max_loop_iterations: int = 5
 
 
