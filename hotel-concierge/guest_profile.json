@@ -1,0 +1,13 @@
+{
+  "profile": {
+    "interests": ["art", "local-food", "history", "nightlife"],
+    "dietary_restrictions": ["vegan"],
+    "pace": "moderate",
+    "budget_level": "luxury",
+    "party_composition": "couple",
+    "time_available": {
+      "start_time": "09:00",
+      "end_time": "21:00"
+    }
+  }
+}

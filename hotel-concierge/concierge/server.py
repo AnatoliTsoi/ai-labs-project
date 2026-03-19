@@ -2,6 +2,12 @@
 
 import logging
 import uuid
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env BEFORE any ADK imports so GOOGLE_API_KEY is in the environment
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -168,8 +174,9 @@ async def create_plan(
     body: PlanRequest,
     x_session_id: str = Header(default=""),
 ):
-    session_id = x_session_id or f"session-{uuid.uuid4().hex[:12]}"
-    user_id = f"user-{session_id[:8]}"
+    # Always generate a unique session ID to avoid AlreadyExistsError on retries
+    session_id = f"session-{uuid.uuid4().hex}"
+    user_id = f"user-{uuid.uuid4().hex[:8]}"
 
     profile_dict = _profile_to_state_dict(body.profile, session_id)
 
@@ -234,4 +241,5 @@ async def create_plan(
     except Exception as e:
         logger.exception("Error running concierge orchestrator")
         raise HTTPException(status_code=500, detail=str(e))
+
 

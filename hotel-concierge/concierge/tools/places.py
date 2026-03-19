@@ -1,54 +1,73 @@
-"""Google Places API wrapper.
+"""Google Places API (New) — Text Search & Place Details.
 
-Phase 1: Uses mock data so the agent runs without a real API key.
-Phase 2: Replace _call_places_api with real httpx calls.
+Uses the Places API (New) REST endpoints:
+- POST https://places.googleapis.com/v1/places:searchText
+- GET  https://places.googleapis.com/v1/places/{place_id}
 """
 
-import uuid
+import logging
+import os
+
+import httpx
 from google.adk.tools import ToolContext
 
-from concierge.models.discovered_option import DiscoveredOption
+logger = logging.getLogger(__name__)
+
+_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+_PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places"
+
+_FIELD_MASK = (
+    "places.id,"
+    "places.displayName,"
+    "places.formattedAddress,"
+    "places.location,"
+    "places.rating,"
+    "places.priceLevel,"
+    "places.currentOpeningHours,"
+    "places.primaryType,"
+    "places.websiteUri"
+)
+
+_DETAILS_FIELD_MASK = (
+    "id,displayName,formattedAddress,location,rating,"
+    "priceLevel,currentOpeningHours,primaryType,websiteUri,"
+    "reviews,editorialSummary"
+)
 
 
-# ---------------------------------------------------------------------------
-# Mock data helpers
-# ---------------------------------------------------------------------------
+def _parse_price_level(raw: str | None) -> int:
+    """Convert API price level string to int 1-4."""
+    mapping = {
+        "PRICE_LEVEL_FREE": 0,
+        "PRICE_LEVEL_INEXPENSIVE": 1,
+        "PRICE_LEVEL_MODERATE": 2,
+        "PRICE_LEVEL_EXPENSIVE": 3,
+        "PRICE_LEVEL_VERY_EXPENSIVE": 4,
+    }
+    return mapping.get(raw or "", 2)
 
-def _make_mock_options(
-    query: str,
-    lat: float,
-    lng: float,
-    count: int = 5,
-) -> list[dict]:
-    """Return mock place data shaped like Places API (New) responses."""
-    categories = ["restaurant", "attraction", "cafe", "museum", "park"]
-    templates = [
-        {"name": f"Le Bistro {query[:4].title()}", "category": "restaurant",
-         "rating": 4.5, "price_level": 2},
-        {"name": f"Café {query[:3].title()} Modern", "category": "cafe",
-         "rating": 4.2, "price_level": 1},
-        {"name": f"Museum of {query[:5].title()} Arts", "category": "museum",
-         "rating": 4.7, "price_level": 2},
-        {"name": f"{query[:4].title()} City Park", "category": "park",
-         "rating": 4.3, "price_level": 1},
-        {"name": f"Restaurant {query[:3].title()} Fusion", "category": "restaurant",
-         "rating": 4.1, "price_level": 3},
-    ]
-    results = []
-    for i, tmpl in enumerate(templates[:count]):
-        results.append({
-            "place_id": str(uuid.uuid4()),
-            "name": tmpl["name"],
-            "category": tmpl["category"],
-            "rating": tmpl["rating"],
-            "price_level": tmpl["price_level"],
-            "address": f"{i * 10 + 1} Sample Street",
-            "lat": lat + i * 0.002,
-            "lng": lng + i * 0.002,
-            "opening_hours": ["Mon-Sun: 08:00-22:00"],
-            "source": "places_api",
-        })
-    return results
+
+def _parse_place(raw: dict) -> dict:
+    """Normalise a Places API (New) result into our internal shape."""
+    location = raw.get("location", {})
+    opening_hours = raw.get("currentOpeningHours", {})
+    weekday_text = opening_hours.get("weekdayDescriptions", [])
+
+    return {
+        "place_id": raw.get("id", ""),
+        "name": raw.get("displayName", {}).get("text", "Unknown"),
+        "category": raw.get("primaryType", "place"),
+        "rating": raw.get("rating", 0),
+        "price_level": _parse_price_level(raw.get("priceLevel")),
+        "address": raw.get("formattedAddress", ""),
+        "lat": location.get("latitude", 0),
+        "lng": location.get("longitude", 0),
+        "opening_hours": weekday_text[:3] if weekday_text else ["Hours not available"],
+        "website": raw.get("websiteUri", ""),
+        "source": "places_api",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +84,7 @@ def search_nearby_places(
     """Search for places near a location using Google Places API.
 
     Args:
-        query: Type of place or keyword (e.g. "restaurant", "museum").
+        query: Type of place or keyword (e.g. "vegan restaurant", "art museum").
         latitude: Search center latitude.
         longitude: Search center longitude.
         radius_meters: Search radius in meters (default 5000).
@@ -73,10 +92,42 @@ def search_nearby_places(
     Returns:
         Dict with "places" list of place data.
     """
-    # TODO Phase 2: Replace with real Places API (New) searchNearby call
-    # POST https://places.googleapis.com/v1/places:searchNearby
-    mock_results = _make_mock_options(query, latitude, longitude)
-    return {"places": mock_results, "status": "mock"}
+    body = {
+        "textQuery": query,
+        "locationBias": {
+            "circle": {
+                "center": {"latitude": latitude, "longitude": longitude},
+                "radius": float(radius_meters),
+            }
+        },
+        "maxResultCount": 5,
+        "languageCode": "en",
+    }
+
+    try:
+        resp = httpx.post(
+            _TEXT_SEARCH_URL,
+            json=body,
+            headers={
+                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-FieldMask": _FIELD_MASK,
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        places = [_parse_place(p) for p in data.get("places", [])]
+        logger.info("Places API returned %d results for '%s'", len(places), query)
+        return {"places": places, "status": "ok"}
+
+    except httpx.HTTPStatusError as e:
+        logger.error("Places API error %s: %s", e.response.status_code, e.response.text)
+        return {"places": [], "status": "error", "error": str(e)}
+    except Exception as e:
+        logger.error("Places API request failed: %s", e)
+        return {"places": [], "status": "error", "error": str(e)}
 
 
 def get_place_details(
@@ -91,15 +142,33 @@ def get_place_details(
     Returns:
         Dict with detailed place information.
     """
-    # TODO Phase 2: Replace with real Places API (New) getPlace call
-    # GET https://places.googleapis.com/v1/places/{place_id}
-    return {
-        "place_id": place_id,
-        "name": "Sample Place",
-        "opening_hours": ["Mon-Sun: 09:00-21:00"],
-        "reviews_summary": "Highly rated by recent visitors.",
-        "status": "mock",
-    }
+    url = f"{_PLACE_DETAILS_URL}/{place_id}"
+
+    try:
+        resp = httpx.get(
+            url,
+            headers={
+                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-FieldMask": _DETAILS_FIELD_MASK,
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+
+        result = _parse_place(raw)
+        # Add extra detail fields
+        editorial = raw.get("editorialSummary", {})
+        result["reviews_summary"] = editorial.get("text", "No editorial summary available.")
+        return result
+
+    except httpx.HTTPStatusError as e:
+        logger.error("Place Details error %s: %s", e.response.status_code, e.response.text)
+        return {"place_id": place_id, "error": str(e)}
+    except Exception as e:
+        logger.error("Place Details request failed: %s", e)
+        return {"place_id": place_id, "error": str(e)}
 
 
 def save_discovered_options(

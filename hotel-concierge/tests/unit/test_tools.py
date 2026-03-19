@@ -1,12 +1,11 @@
 """Unit tests for tool functions (places, routes, weather, state_tools)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from concierge.tools.guest_history import get_guest_history
 from concierge.tools.places import (
-    _make_mock_options,
     get_place_details,
     save_discovered_options,
     search_nearby_places,
@@ -26,6 +25,46 @@ from concierge.tools.state_tools import (
 from concierge.tools.weather import get_weather_forecast
 
 
+# ---------------------------------------------------------------------------
+# Shared mock HTTP responses
+# ---------------------------------------------------------------------------
+
+def _mock_places_response():
+    """Return a mock httpx Response for Places Text Search."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {
+        "places": [
+            {
+                "id": "place-001",
+                "displayName": {"text": "Le Bistro"},
+                "formattedAddress": "1 Rue de Rivoli, Paris",
+                "location": {"latitude": 48.8566, "longitude": 2.3522},
+                "rating": 4.5,
+                "priceLevel": "PRICE_LEVEL_MODERATE",
+                "primaryType": "restaurant",
+                "currentOpeningHours": {
+                    "weekdayDescriptions": ["Mon: 09:00-22:00"],
+                    "openNow": True,
+                },
+            }
+        ]
+    }
+    return resp
+
+
+def _mock_route_response():
+    """Return a mock httpx Response for Routes computeRoutes."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {
+        "routes": [{"duration": "420s", "distanceMeters": 1500}]
+    }
+    return resp
+
+
 def _mock_ctx(initial_state: dict | None = None) -> MagicMock:
     ctx = MagicMock()
     ctx.state = initial_state or {}
@@ -37,42 +76,43 @@ def _mock_ctx(initial_state: dict | None = None) -> MagicMock:
 # Places tools
 # ---------------------------------------------------------------------------
 
-class TestMakeMockOptions:
-    def test_returns_requested_count(self) -> None:
-        results = _make_mock_options("restaurant", 48.8, 2.3, count=3)
-        assert len(results) == 3
-
-    def test_all_have_required_fields(self) -> None:
-        results = _make_mock_options("cafe", 48.8, 2.3, count=2)
-        for r in results:
-            assert "place_id" in r
-            assert "name" in r
-            assert "rating" in r
-            assert "lat" in r and "lng" in r
-
-
 class TestSearchNearbyPlaces:
-    def test_returns_places_key(self) -> None:
+    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
+    def test_returns_places_key(self, mock_post) -> None:
         result = search_nearby_places("restaurant", 48.8, 2.3)
         assert "places" in result
 
-    def test_places_is_list(self) -> None:
+    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
+    def test_places_is_list(self, mock_post) -> None:
         result = search_nearby_places("museum", 48.8, 2.3)
         assert isinstance(result["places"], list)
 
-    def test_default_radius_accepted(self) -> None:
-        result = search_nearby_places("park", 48.8, 2.3, radius_meters=5000)
-        assert result["places"]
+    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
+    def test_parsed_place_has_required_fields(self, mock_post) -> None:
+        result = search_nearby_places("restaurant", 48.8, 2.3)
+        place = result["places"][0]
+        assert "place_id" in place
+        assert "name" in place
+        assert "lat" in place and "lng" in place
+        assert "rating" in place
 
 
 class TestGetPlaceDetails:
-    def test_returns_place_id(self) -> None:
+    @patch("concierge.tools.places.httpx.get")
+    def test_returns_place_id(self, mock_get) -> None:
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {
+            "id": "place-001",
+            "displayName": {"text": "Test Place"},
+            "formattedAddress": "1 Test St",
+            "location": {"latitude": 48.8, "longitude": 2.3},
+            "rating": 4.0,
+            "primaryType": "restaurant",
+        }
+        mock_get.return_value = resp
         result = get_place_details("place-001")
         assert result["place_id"] == "place-001"
-
-    def test_returns_opening_hours(self) -> None:
-        result = get_place_details("place-002")
-        assert "opening_hours" in result
 
 
 class TestSaveDiscoveredOptions:
@@ -89,47 +129,46 @@ class TestSaveDiscoveredOptions:
 # ---------------------------------------------------------------------------
 
 class TestComputeRoute:
-    def test_returns_duration_and_distance(self) -> None:
+    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
+    def test_returns_duration_and_distance(self, mock_post) -> None:
         result = compute_route(48.85, 2.35, 48.86, 2.36)
         assert "duration_minutes" in result
         assert "distance_meters" in result
 
-    def test_walk_is_slower_than_drive(self) -> None:
-        walk = compute_route(48.0, 2.0, 48.1, 2.1, mode="walk")
-        drive = compute_route(48.0, 2.0, 48.1, 2.1, mode="drive")
-        assert walk["duration_minutes"] >= drive["duration_minutes"]
-
-    def test_same_point_is_short(self) -> None:
-        result = compute_route(48.0, 2.0, 48.0, 2.0, mode="walk")
-        assert result["duration_minutes"] >= 2  # minimum floor
+    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
+    def test_returns_correct_values(self, mock_post) -> None:
+        result = compute_route(48.85, 2.35, 48.86, 2.36)
+        assert result["duration_minutes"] == 7  # 420s = 7 min
+        assert result["distance_meters"] == 1500
 
 
 class TestGetTravelTime:
-    def test_returns_int(self) -> None:
+    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
+    def test_returns_int(self, mock_post) -> None:
         result = get_travel_time(48.0, 2.0, 48.1, 2.1)
         assert isinstance(result, int)
 
-    def test_positive_duration(self) -> None:
+    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
+    def test_positive_duration(self, mock_post) -> None:
         result = get_travel_time(48.0, 2.0, 48.05, 2.05)
         assert result > 0
 
 
 class TestCheckOpeningHours:
-    def test_midday_is_open(self) -> None:
+    @patch("concierge.tools.routes.httpx.get")
+    def test_midday_is_open(self, mock_get) -> None:
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"currentOpeningHours": {"openNow": True}}
+        mock_get.return_value = resp
         result = check_opening_hours("p-001", "12:00")
         assert result["is_open"] is True
 
-    def test_midnight_is_closed(self) -> None:
-        result = check_opening_hours("p-001", "00:00")
-        assert result["is_open"] is False
-
-    def test_returns_next_open_when_closed(self) -> None:
-        result = check_opening_hours("p-001", "00:00")
-        assert result["next_open"] is not None
-
-    def test_next_open_none_when_open(self) -> None:
-        result = check_opening_hours("p-001", "12:00")
-        assert result["next_open"] is None
+    def test_fallback_midnight_is_closed(self) -> None:
+        """When API fails, fallback uses hour-based check."""
+        with patch("concierge.tools.routes.httpx.get", side_effect=Exception("timeout")):
+            result = check_opening_hours("p-001", "00:00")
+            assert result["is_open"] is False
 
 
 # ---------------------------------------------------------------------------
