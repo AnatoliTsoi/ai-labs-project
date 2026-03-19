@@ -15,11 +15,13 @@ load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 from concierge.config.settings import reset_settings
 reset_settings()
 
+import tenacity
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from google.adk.runners import InMemoryRunner
+from google.genai import errors as genai_errors
 from google.genai import types
 
 from concierge.agents.orchestrator import build_concierge_orchestrator
@@ -319,33 +321,65 @@ async def create_plan(
 
     message = types.UserContent(parts=[types.Part(text=profile_summary)])
 
+    def _is_retryable(exc: BaseException) -> bool:
+        return isinstance(exc, genai_errors.ServerError) and exc.code >= 500
+
     try:
-        # Create session with pre-seeded guest profile in state
-        session = await runner.session_service.create_session(
-            app_name=settings.app_name,
-            user_id=user_id,
-            session_id=session_id,
-            state={KEY_GUEST_PROFILE: profile_dict},
-        )
+        run_start = time.monotonic()
+        logger.info("[  0.0s] ── concierge pipeline START ──────────────────────────────")
 
-        # Run the full orchestrator loop
         last_text = ""
-        captured_plan = None
+        attempt_num = 0
 
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=message,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.text:
-                        last_text = part.text
-                    # Capture save_day_plan function response
-                    if hasattr(part, "function_response") and part.function_response:
-                        fr = part.function_response
-                        if fr.name == "save_day_plan" and fr.response:
-                            logger.info("Captured save_day_plan response")
+        try:
+            async with asyncio.timeout(settings.request_timeout_seconds):
+                async for attempt in tenacity.AsyncRetrying(
+                    retry=tenacity.retry_if_exception(_is_retryable),
+                    wait=tenacity.wait_exponential(multiplier=1, min=2, max=30),
+                    stop=tenacity.stop_after_attempt(3),
+                    reraise=True,
+                    before_sleep=lambda rs: logger.warning(
+                        "[%5.1fs] Gemini 5xx (attempt %d) — retrying in %.1fs",
+                        time.monotonic() - run_start,
+                        rs.attempt_number,
+                        rs.next_action.sleep,  # type: ignore[union-attr]
+                    ),
+                ):
+                    with attempt:
+                        attempt_num += 1
+                        attempt_session_id = session_id if attempt_num == 1 else f"{session_id}-r{attempt_num}"
+                        session = await runner.session_service.create_session(
+                            app_name=settings.app_name,
+                            user_id=user_id,
+                            session_id=attempt_session_id,
+                        )
+                        last_text = ""
+                        async for event in runner.run_async(
+                            user_id=user_id,
+                            session_id=session.id,
+                            new_message=message,
+                        ):
+                            elapsed = time.monotonic() - run_start
+                            _log_adk_event(event, elapsed)
+                            if event.content and event.content.parts:
+                                for part in event.content.parts:
+                                    if part.text:
+                                        last_text = part.text
+
+        except TimeoutError:
+            elapsed = time.monotonic() - run_start
+            logger.error(
+                "[%5.1fs] Orchestrator timed out after %ds",
+                elapsed,
+                settings.request_timeout_seconds,
+            )
+            raise HTTPException(
+                status_code=504,
+                detail=f"Plan generation timed out after {settings.request_timeout_seconds}s",
+            )
+
+        elapsed = time.monotonic() - run_start
+        logger.info("[%5.1fs] ── concierge pipeline END ────────────────────────────────", elapsed)
 
         # Re-fetch session to get the latest state after the run
         session = await runner.session_service.get_session(
@@ -354,11 +388,18 @@ async def create_plan(
             session_id=session.id,
         )
 
-        # Debug: log all state keys
-        if session:
-            logger.info("Session state keys after run: %s", list(session.state.keys()))
+        state_keys = list(session.state.keys()) if session else []
+        logger.info("Session state keys after run: %s", state_keys)
 
         plan = session.state.get(KEY_CURRENT_PLAN) if session else None
+
+        if not plan:
+            missing = [k for k in ("guest_profile", "discovered_options", "current_plan") if k not in state_keys]
+            logger.warning(
+                "No current_plan in session state (missing keys: %s). "
+                "route_planner_agent likely skipped save_day_plan.",
+                missing,
+            )
 
         # Fallback: try to parse JSON from the last text output
         if not plan and last_text:
@@ -367,7 +408,6 @@ async def create_plan(
                 logger.info("Extracted plan from text output (fallback)")
 
         if not plan:
-            logger.warning("No current_plan found after run")
             return {
                 "day_plan": None,
                 "message": last_text,
