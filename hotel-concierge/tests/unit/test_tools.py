@@ -1,6 +1,6 @@
 """Unit tests for tool functions (places, routes, weather, state_tools)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -72,24 +72,38 @@ def _mock_ctx(initial_state: dict | None = None) -> MagicMock:
     return ctx
 
 
+def _async_client_mock(response: MagicMock) -> MagicMock:
+    """Build an AsyncClient context-manager mock returning the given response."""
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=response)
+    client.get = AsyncMock(return_value=response)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=client)
+    cm.__aexit__ = AsyncMock(return_value=None)
+    return cm
+
+
 # ---------------------------------------------------------------------------
 # Places tools
 # ---------------------------------------------------------------------------
 
 class TestSearchNearbyPlaces:
-    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
-    def test_returns_places_key(self, mock_post) -> None:
-        result = search_nearby_places("restaurant", 48.8, 2.3)
+    @patch("concierge.tools.places.httpx.AsyncClient")
+    async def test_returns_places_key(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_places_response())
+        result = await search_nearby_places("restaurant", 48.8, 2.3)
         assert "places" in result
 
-    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
-    def test_places_is_list(self, mock_post) -> None:
-        result = search_nearby_places("museum", 48.8, 2.3)
+    @patch("concierge.tools.places.httpx.AsyncClient")
+    async def test_places_is_list(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_places_response())
+        result = await search_nearby_places("museum", 48.8, 2.3)
         assert isinstance(result["places"], list)
 
-    @patch("concierge.tools.places.httpx.post", return_value=_mock_places_response())
-    def test_parsed_place_has_required_fields(self, mock_post) -> None:
-        result = search_nearby_places("restaurant", 48.8, 2.3)
+    @patch("concierge.tools.places.httpx.AsyncClient")
+    async def test_parsed_place_has_required_fields(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_places_response())
+        result = await search_nearby_places("restaurant", 48.8, 2.3)
         place = result["places"][0]
         assert "place_id" in place
         assert "name" in place
@@ -98,8 +112,8 @@ class TestSearchNearbyPlaces:
 
 
 class TestGetPlaceDetails:
-    @patch("concierge.tools.places.httpx.get")
-    def test_returns_place_id(self, mock_get) -> None:
+    @patch("concierge.tools.places.httpx.AsyncClient")
+    async def test_returns_place_id(self, mock_cls) -> None:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {
@@ -110,8 +124,8 @@ class TestGetPlaceDetails:
             "rating": 4.0,
             "primaryType": "restaurant",
         }
-        mock_get.return_value = resp
-        result = get_place_details("place-001")
+        mock_cls.return_value = _async_client_mock(resp)
+        result = await get_place_details("place-001")
         assert result["place_id"] == "place-001"
 
 
@@ -129,45 +143,49 @@ class TestSaveDiscoveredOptions:
 # ---------------------------------------------------------------------------
 
 class TestComputeRoute:
-    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
-    def test_returns_duration_and_distance(self, mock_post) -> None:
-        result = compute_route(48.85, 2.35, 48.86, 2.36)
+    @patch("concierge.tools.routes.httpx.AsyncClient")
+    async def test_returns_duration_and_distance(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_route_response())
+        result = await compute_route(48.85, 2.35, 48.86, 2.36)
         assert "duration_minutes" in result
         assert "distance_meters" in result
 
-    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
-    def test_returns_correct_values(self, mock_post) -> None:
-        result = compute_route(48.85, 2.35, 48.86, 2.36)
+    @patch("concierge.tools.routes.httpx.AsyncClient")
+    async def test_returns_correct_values(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_route_response())
+        result = await compute_route(48.85, 2.35, 48.86, 2.36)
         assert result["duration_minutes"] == 7  # 420s = 7 min
         assert result["distance_meters"] == 1500
 
 
 class TestGetTravelTime:
-    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
-    def test_returns_int(self, mock_post) -> None:
-        result = get_travel_time(48.0, 2.0, 48.1, 2.1)
+    @patch("concierge.tools.routes.httpx.AsyncClient")
+    async def test_returns_int(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_route_response())
+        result = await get_travel_time(48.0, 2.0, 48.1, 2.1)
         assert isinstance(result, int)
 
-    @patch("concierge.tools.routes.httpx.post", return_value=_mock_route_response())
-    def test_positive_duration(self, mock_post) -> None:
-        result = get_travel_time(48.0, 2.0, 48.05, 2.05)
+    @patch("concierge.tools.routes.httpx.AsyncClient")
+    async def test_positive_duration(self, mock_cls) -> None:
+        mock_cls.return_value = _async_client_mock(_mock_route_response())
+        result = await get_travel_time(48.0, 2.0, 48.05, 2.05)
         assert result > 0
 
 
 class TestCheckOpeningHours:
-    @patch("concierge.tools.routes.httpx.get")
-    def test_midday_is_open(self, mock_get) -> None:
+    @patch("concierge.tools.routes.httpx.AsyncClient")
+    async def test_midday_is_open(self, mock_cls) -> None:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.json.return_value = {"currentOpeningHours": {"openNow": True}}
-        mock_get.return_value = resp
-        result = check_opening_hours("p-001", "12:00")
+        mock_cls.return_value = _async_client_mock(resp)
+        result = await check_opening_hours("p-001", "12:00")
         assert result["is_open"] is True
 
-    def test_fallback_midnight_is_closed(self) -> None:
+    async def test_fallback_midnight_is_closed(self) -> None:
         """When API fails, fallback uses hour-based check."""
-        with patch("concierge.tools.routes.httpx.get", side_effect=Exception("timeout")):
-            result = check_opening_hours("p-001", "00:00")
+        with patch("concierge.tools.routes.httpx.AsyncClient", side_effect=Exception("timeout")):
+            result = await check_opening_hours("p-001", "00:00")
             assert result["is_open"] is False
 
 

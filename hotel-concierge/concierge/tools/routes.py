@@ -12,8 +12,6 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-
 _COMPUTE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
 _FIELD_MASK = "routes.duration,routes.distanceMeters"
@@ -29,7 +27,15 @@ _MODE_MAP = {
 }
 
 
-def compute_route(
+def _google_headers(field_mask: str) -> dict:
+    return {
+        "X-Goog-Api-Key": os.environ.get("GOOGLE_API_KEY", ""),
+        "X-Goog-FieldMask": field_mask,
+        "Content-Type": "application/json",
+    }
+
+
+async def compute_route(
     origin_lat: float,
     origin_lng: float,
     destination_lat: float,
@@ -66,16 +72,12 @@ def compute_route(
     }
 
     try:
-        resp = httpx.post(
-            _COMPUTE_ROUTES_URL,
-            json=body,
-            headers={
-                "X-Goog-Api-Key": _API_KEY,
-                "X-Goog-FieldMask": _FIELD_MASK,
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                _COMPUTE_ROUTES_URL,
+                json=body,
+                headers=_google_headers(_FIELD_MASK),
+            )
         resp.raise_for_status()
         data = resp.json()
 
@@ -128,7 +130,7 @@ def _fallback_compute(
     }
 
 
-def get_travel_time(
+async def get_travel_time(
     origin_lat: float,
     origin_lng: float,
     destination_lat: float,
@@ -148,11 +150,11 @@ def get_travel_time(
     Returns:
         Estimated travel time in minutes.
     """
-    result = compute_route(origin_lat, origin_lng, destination_lat, destination_lng, mode)
+    result = await compute_route(origin_lat, origin_lng, destination_lat, destination_lng, mode)
     return result["duration_minutes"]
 
 
-def check_opening_hours(
+async def check_opening_hours(
     place_id: str,
     arrival_time: str,
     tool_context: ToolContext = None,
@@ -166,18 +168,13 @@ def check_opening_hours(
     Returns:
         Dict with is_open (bool) and next_open (str or None).
     """
-    # Use Place Details API to get real opening hours
     url = f"https://places.googleapis.com/v1/places/{place_id}"
     try:
-        resp = httpx.get(
-            url,
-            headers={
-                "X-Goog-Api-Key": _API_KEY,
-                "X-Goog-FieldMask": "currentOpeningHours",
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                url,
+                headers=_google_headers("currentOpeningHours"),
+            )
         resp.raise_for_status()
         data = resp.json()
         is_open = data.get("currentOpeningHours", {}).get("openNow", True)

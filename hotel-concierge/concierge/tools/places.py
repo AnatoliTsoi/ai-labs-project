@@ -13,8 +13,6 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places"
 
@@ -70,11 +68,19 @@ def _parse_place(raw: dict) -> dict:
     }
 
 
+def _google_headers(field_mask: str) -> dict:
+    return {
+        "X-Goog-Api-Key": os.environ.get("GOOGLE_API_KEY", ""),
+        "X-Goog-FieldMask": field_mask,
+        "Content-Type": "application/json",
+    }
+
+
 # ---------------------------------------------------------------------------
 # ADK tool functions — called by Discovery Agent
 # ---------------------------------------------------------------------------
 
-def search_nearby_places(
+async def search_nearby_places(
     query: str,
     latitude: float,
     longitude: float,
@@ -105,16 +111,12 @@ def search_nearby_places(
     }
 
     try:
-        resp = httpx.post(
-            _TEXT_SEARCH_URL,
-            json=body,
-            headers={
-                "X-Goog-Api-Key": _API_KEY,
-                "X-Goog-FieldMask": _FIELD_MASK,
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                _TEXT_SEARCH_URL,
+                json=body,
+                headers=_google_headers(_FIELD_MASK),
+            )
         resp.raise_for_status()
         data = resp.json()
 
@@ -130,7 +132,7 @@ def search_nearby_places(
         return {"places": [], "status": "error", "error": str(e)}
 
 
-def get_place_details(
+async def get_place_details(
     place_id: str,
     tool_context: ToolContext = None,
 ) -> dict:
@@ -145,20 +147,15 @@ def get_place_details(
     url = f"{_PLACE_DETAILS_URL}/{place_id}"
 
     try:
-        resp = httpx.get(
-            url,
-            headers={
-                "X-Goog-Api-Key": _API_KEY,
-                "X-Goog-FieldMask": _DETAILS_FIELD_MASK,
-                "Content-Type": "application/json",
-            },
-            timeout=10,
-        )
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                url,
+                headers=_google_headers(_DETAILS_FIELD_MASK),
+            )
         resp.raise_for_status()
         raw = resp.json()
 
         result = _parse_place(raw)
-        # Add extra detail fields
         editorial = raw.get("editorialSummary", {})
         result["reviews_summary"] = editorial.get("text", "No editorial summary available.")
         return result
