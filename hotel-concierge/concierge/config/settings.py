@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     max_loop_iterations: int = 5
 
+    def agent_model(self, override: str) -> str:
+        return override or self.gemini_model
+
 
 _settings: Settings | None = None
 

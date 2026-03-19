@@ -22,7 +22,7 @@ def build_discovery_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="discovery_agent",
-        model=settings.gemini_model,
+        model=settings.agent_model(settings.discovery_model),
         description=(
             "Searches for local places and activities using Google Places API. "
             "Saves top scored options to session state for the Route Planner."
