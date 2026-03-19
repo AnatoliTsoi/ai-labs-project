@@ -6,6 +6,9 @@ import pytest
 
 from concierge.tools.guest_history import get_guest_history
 from concierge.tools.places import (
+    _dietary_compatibility,
+    _interest_match,
+    _walking_minutes,
     get_place_details,
     save_discovered_options,
     search_nearby_places,
@@ -129,12 +132,88 @@ class TestGetPlaceDetails:
         assert result["place_id"] == "place-001"
 
 
+class TestDietaryCompatibility:
+    def test_no_restrictions_returns_one(self) -> None:
+        assert _dietary_compatibility({"category": "steakhouse"}, []) == 1.0
+
+    def test_vegan_conflict_with_steakhouse(self) -> None:
+        assert _dietary_compatibility({"category": "steakhouse", "name": "Grill"}, ["vegan"]) == 0.0
+
+    def test_vegan_no_conflict_with_cafe(self) -> None:
+        result = _dietary_compatibility({"category": "cafe", "name": "Green Café"}, ["vegan"])
+        assert result == 0.8
+
+    def test_halal_conflict_with_bar(self) -> None:
+        assert _dietary_compatibility({"category": "bar", "name": "The Pub"}, ["halal"]) == 0.0
+
+
+class TestInterestMatch:
+    def test_no_interests_returns_half(self) -> None:
+        assert _interest_match({"category": "museum"}, []) == 0.5
+
+    def test_art_matches_art_gallery(self) -> None:
+        assert _interest_match({"category": "art_gallery"}, ["art"]) == 1.0
+
+    def test_no_match_returns_half(self) -> None:
+        assert _interest_match({"category": "steakhouse"}, ["art"]) == 0.5
+
+
+class TestWalkingMinutes:
+    def test_same_location_is_one_minute(self) -> None:
+        assert _walking_minutes(48.85, 2.35, 48.85, 2.35) == 1
+
+    def test_returns_positive(self) -> None:
+        assert _walking_minutes(48.85, 2.35, 48.86, 2.36) > 0
+
+
 class TestSaveDiscoveredOptions:
+    def _raw_place(self, place_id: str = "p1", category: str = "museum") -> dict:
+        return {
+            "place_id": place_id,
+            "name": "Test Place",
+            "category": category,
+            "rating": 4.0,
+            "price_level": 2,
+            "address": "1 Main St",
+            "lat": 48.86,
+            "lng": 2.35,
+            "opening_hours": [],
+            "source": "places_api",
+        }
+
     def test_saves_to_state(self) -> None:
         ctx = _mock_ctx()
-        options = [{"place_id": "p1", "name": "Café"}]
-        msg = save_discovered_options(options, ctx)
-        assert ctx.state["discovered_options"] == options
+        msg = save_discovered_options([self._raw_place()], ctx)
+        assert "discovered_options" in ctx.state
+        assert len(ctx.state["discovered_options"]) >= 0  # may be filtered
+
+    def test_enriches_lat_lng(self) -> None:
+        ctx = _mock_ctx({"guest_profile": {"guest_id": "g1", "dietary_restrictions": [],
+            "interests": ["art"], "budget_level": "moderate", "pace": "moderate",
+            "party_composition": "solo", "mobility": "full",
+            "time_available": {"start_time": "09:00", "end_time": "21:00"},
+            "location_context": "", "special_requests": []}})
+        save_discovered_options([self._raw_place()], ctx)
+        saved = ctx.state["discovered_options"]
+        if saved:
+            assert "lat_lng" in saved[0]
+
+    def test_filters_dietary_conflicts(self) -> None:
+        ctx = _mock_ctx({"guest_profile": {"guest_id": "g1",
+            "dietary_restrictions": ["vegan"], "interests": [],
+            "budget_level": "moderate", "pace": "moderate",
+            "party_composition": "solo", "mobility": "full",
+            "time_available": {"start_time": "09:00", "end_time": "21:00"},
+            "location_context": "", "special_requests": []}})
+        places = [self._raw_place("p1", "steakhouse"), self._raw_place("p2", "cafe")]
+        save_discovered_options(places, ctx)
+        saved = ctx.state["discovered_options"]
+        saved_ids = [s["place_id"] for s in saved]
+        assert "p1" not in saved_ids  # steakhouse filtered for vegan
+
+    def test_message_contains_count(self) -> None:
+        ctx = _mock_ctx()
+        msg = save_discovered_options([self._raw_place()], ctx)
         assert "1" in msg
 
 

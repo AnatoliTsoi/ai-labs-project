@@ -6,6 +6,7 @@ Uses the Places API (New) REST endpoints:
 """
 
 import logging
+import math
 import os
 
 import httpx
@@ -66,6 +67,67 @@ def _parse_place(raw: dict) -> dict:
         "website": raw.get("websiteUri", ""),
         "source": "places_api",
     }
+
+
+# ---------------------------------------------------------------------------
+# Enrichment helpers — deterministic scoring for fields the LLM can't provide
+# ---------------------------------------------------------------------------
+
+# Place category keywords that conflict with dietary restrictions
+_DIETARY_CONFLICTS: dict[str, set[str]] = {
+    "vegan": {"steakhouse", "burger", "seafood", "barbecue", "sushi", "ramen", "meat"},
+    "vegetarian": {"steakhouse", "burger", "barbecue", "meat"},
+    "halal": {"bar", "brewery", "pub", "wine", "sake"},
+    "kosher": {"bar", "brewery", "pub", "seafood"},
+}
+
+# Guest interest keywords → place category keywords
+_INTEREST_TO_CATEGORIES: dict[str, set[str]] = {
+    "art": {"art_gallery", "museum", "art", "gallery"},
+    "history": {"museum", "historical", "monument", "church", "cathedral", "palace"},
+    "nature": {"park", "garden", "nature_reserve", "botanical"},
+    "nightlife": {"bar", "night_club", "brewery", "cocktail", "lounge"},
+    "local-food": {"restaurant", "food", "market", "cafe", "bistro", "brasserie"},
+    "shopping": {"shopping_mall", "clothing_store", "market", "shop", "boutique"},
+    "sports": {"sports", "gym", "stadium", "arena"},
+    "music": {"music_venue", "concert_hall", "jazz", "live_music"},
+}
+
+
+def _dietary_compatibility(raw: dict, restrictions: list[str]) -> float:
+    """Return 0.0 if place conflicts with any restriction, 0.8 if uncertain, 1.0 if clear."""
+    if not restrictions:
+        return 1.0
+    text = ((raw.get("category") or "") + " " + raw.get("name", "")).lower()
+    for restriction in restrictions:
+        conflicts = _DIETARY_CONFLICTS.get(restriction.lower(), set())
+        if any(kw in text for kw in conflicts):
+            return 0.0
+    return 0.8  # restrictions present but no detected conflict
+
+
+def _interest_match(raw: dict, interests: list[str]) -> float:
+    """Return 1.0 if category matches any guest interest, 0.5 otherwise."""
+    if not interests:
+        return 0.5
+    category = (raw.get("category") or "").lower()
+    for interest in interests:
+        matched = _INTEREST_TO_CATEGORIES.get(interest.lower(), set())
+        if any(kw in category for kw in matched):
+            return 1.0
+    return 0.5
+
+
+def _walking_minutes(lat1: float, lng1: float, lat2: float, lng2: float) -> int:
+    """Approximate walking time in minutes via haversine at 5 km/h."""
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+    )
+    km = 6371 * 2 * math.asin(math.sqrt(a))
+    return max(1, int(km / 5 * 60))
 
 
 def _google_headers(field_mask: str) -> dict:
@@ -172,13 +234,55 @@ def save_discovered_options(
     options: list[dict],
     tool_context: ToolContext,
 ) -> str:
-    """Persist scored discovery results to session state.
+    """Enrich, score, filter, and persist discovered options to session state.
+
+    Enriches each raw Places API dict with computed fields (dietary_compatibility,
+    interest_match, travel_time_from_hotel), then scores and filters using the
+    calibrated scoring weights before saving.
 
     Args:
-        options: List of discovered option dicts.
+        options: List of raw place dicts from search_nearby_places.
 
     Returns:
         Confirmation message.
     """
-    tool_context.state["discovered_options"] = options
-    return f"Saved {len(options)} discovered options to session."
+    from concierge.config.scoring_weights import DEFAULT_WEIGHTS
+    from concierge.config.settings import get_settings
+    from concierge.models.discovered_option import DiscoveredOption
+    from concierge.models.guest_profile import GuestProfile
+    from concierge.tools.scoring import score_and_filter_options
+
+    settings = get_settings()
+    profile_dict = tool_context.state.get("guest_profile", {})
+    restrictions = profile_dict.get("dietary_restrictions", [])
+    interests = profile_dict.get("interests", [])
+
+    enriched = []
+    for raw in options:
+        lat = raw.get("lat", settings.hotel_lat)
+        lng = raw.get("lng", settings.hotel_lng)
+        enriched.append(
+            DiscoveredOption.from_dict({
+                **raw,
+                "lat_lng": [lat, lng],
+                "dietary_compatibility": _dietary_compatibility(raw, restrictions),
+                "interest_match": _interest_match(raw, interests),
+                "travel_time_from_hotel": _walking_minutes(
+                    settings.hotel_lat, settings.hotel_lng, lat, lng
+                ),
+                "booking_available": raw.get("booking_available", False),
+            })
+        )
+
+    if profile_dict:
+        profile = GuestProfile.from_dict(profile_dict)
+        scored = score_and_filter_options(enriched, profile, DEFAULT_WEIGHTS)
+    else:
+        scored = enriched
+
+    result = [o.to_dict() for o in scored]
+    tool_context.state["discovered_options"] = result
+    logger.info(
+        "Saved %d options (scored/filtered from %d raw results)", len(result), len(options)
+    )
+    return f"Saved {len(result)} discovered options to session (filtered from {len(options)})."
