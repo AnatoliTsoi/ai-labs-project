@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { generateSessionId } from '../api/agent';
 
 const SESSION_KEY = 'concierge_session_id';

@@ -1,39 +1,40 @@
-import { useState, useCallback } from 'react';
-import type { GuestProfile, DayPlan } from './types';
-import { Header } from './components/Header';
-import { WelcomeScreen } from './components/WelcomeScreen';
-import { QuestionnaireFlow } from './components/QuestionnaireFlow';
-import { LoadingScreen } from './components/LoadingScreen';
-import { DayPlanView } from './components/DayPlanView';
-import { useSession } from './hooks/useSession';
-import { submitProfile } from './api/agent';
-import './App.css';
+import { useState, useCallback } from "react";
+import type { GuestProfile, DayPlan } from "./types";
+import { Header } from "./components/Header";
+import { WelcomeScreen } from "./components/WelcomeScreen";
+import { QuestionnaireFlow } from "./components/QuestionnaireFlow";
+import { LoadingScreen } from "./components/LoadingScreen";
+import { DayPlanView } from "./components/DayPlanView";
+import { useSession } from "./hooks/useSession";
+import { submitProfile } from "./api/agent";
+import "./App.css";
 
-type AppState = 'welcome' | 'questionnaire' | 'loading' | 'itinerary';
+type AppState = "welcome" | "questionnaire" | "loading" | "itinerary";
 
 function App() {
   const { sessionId } = useSession();
-  const [appState, setAppState] = useState<AppState>('welcome');
+  const [appState, setAppState] = useState<AppState>("welcome");
   const [dayPlan, setDayPlan] = useState<DayPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleStart = useCallback(() => {
-    setAppState('questionnaire');
+    setAppState("questionnaire");
   }, []);
 
   const handleProfileComplete = useCallback(
     async (profile: Partial<GuestProfile>) => {
-      setAppState('loading');
+      setAppState("loading");
       setError(null);
 
       try {
         const plan = await submitProfile(profile, sessionId);
         setDayPlan(plan);
-        setAppState('itinerary');
+        setAppState("itinerary");
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Something went wrong';
+        const message =
+          err instanceof Error ? err.message : "Something went wrong";
         setError(message);
-        setAppState('questionnaire');
+        setAppState("questionnaire");
       }
     },
     [sessionId],
@@ -42,36 +43,28 @@ function App() {
   const handleStartOver = useCallback(() => {
     setDayPlan(null);
     setError(null);
-    setAppState('questionnaire');
-  }, []);
-
-  const handleNewChat = useCallback(() => {
-    setDayPlan(null);
-    setError(null);
-    setAppState('welcome');
+    setAppState("questionnaire");
   }, []);
 
   return (
     <div className="app" id="concierge-app">
-      <Header onNewChat={handleNewChat} />
+      <Header />
 
       <main className="app__main">
-        {appState === 'welcome' && (
-          <WelcomeScreen onStart={handleStart} />
-        )}
+        {appState === "welcome" && <WelcomeScreen onStart={handleStart} />}
 
-        {appState === 'questionnaire' && (
+        {appState === "questionnaire" && (
           <QuestionnaireFlow onComplete={handleProfileComplete} />
         )}
 
-        {appState === 'loading' && <LoadingScreen />}
+        {appState === "loading" && <LoadingScreen />}
 
-        {appState === 'itinerary' && dayPlan && (
+        {appState === "itinerary" && dayPlan && (
           <div className="app__itinerary">
             <div className="app__itinerary-inner">
               <DayPlanView
                 plan={dayPlan}
-                onApprove={() => alert('Plan confirmed! 🎉')}
+                onApprove={() => alert("Plan confirmed! 🎉")}
                 onRequestChanges={handleStartOver}
               />
             </div>

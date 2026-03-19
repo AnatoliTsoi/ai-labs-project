@@ -1,4 +1,4 @@
-import type { ChatMessage, DayPlan, GuestProfile } from '../types';
+import type { DayPlan, GuestProfile } from '../types';
 
 const MOCK_DELAY = 2500;
 
