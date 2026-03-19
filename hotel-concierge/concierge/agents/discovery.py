@@ -3,7 +3,7 @@ from pathlib import Path
 from google.adk.agents import LlmAgent
 
 from concierge.config.settings import get_settings
-from concierge.tools.places import get_place_details, save_discovered_options, search_nearby_places
+from concierge.tools.places import batch_search_places, get_place_details, save_discovered_options, search_nearby_places
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "discovery_system.md"
 
@@ -22,13 +22,14 @@ def build_discovery_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="discovery_agent",
-        model=settings.agent_model(settings.discovery_model),
+        model=settings.gemini_model,
         description=(
             "Searches for local places and activities using Google Places API. "
             "Saves top scored options to session state for the Route Planner."
         ),
         instruction=_load_instruction(),
         tools=[
+            batch_search_places,
             search_nearby_places,
             get_place_details,
             save_discovered_options,

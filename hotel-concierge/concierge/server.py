@@ -1,7 +1,9 @@
 """FastAPI REST server — bridges the React frontend to the ADK orchestrator."""
 
 import asyncio
+import json
 import logging
+import re
 import time
 import uuid
 from datetime import date
@@ -10,7 +12,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env BEFORE any ADK imports so GOOGLE_API_KEY is in the environment
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+
+# Reset cached settings so they reload from the fresh .env
+from concierge.config.settings import reset_settings
+reset_settings()
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -82,6 +88,57 @@ class PlanRequest(BaseModel):
     profile: ProfilePayload
 
 
+# ── Response models ──
+
+class TravelSegment(BaseModel):
+    mode: str = "walking"
+    duration_minutes: int = 0
+    distance_km: float = 0.0
+
+
+class PlaceInfo(BaseModel):
+    place_id: str = ""
+    name: str = "Unknown"
+    category: str = "place"
+    rating: float = 0.0
+    price_level: int = 2
+    address: str = ""
+    lat_lng: list[float] = [0.0, 0.0]
+    opening_hours: list[str] = []
+    dietary_compatibility: float = 0.8
+    interest_match: float = 0.8
+    travel_time_from_hotel: int = 10
+    booking_available: bool = False
+    source: str = "places_api"
+    website: str = ""
+
+
+class StopResponse(BaseModel):
+    order: int
+    place: PlaceInfo
+    arrival_time: str = ""
+    departure_time: str = ""
+    duration_minutes: int = 60
+    travel_to_next: TravelSegment | None = None
+    notes: str = ""
+
+
+class DayPlanResponse(BaseModel):
+    date: str = ""
+    stops: list[StopResponse] = []
+    total_travel_time: int = 0
+    estimated_total_cost: str = ""
+    weather_contingency: str = ""
+    back_at_hotel_by: str = ""
+    map_url: str | None = None
+
+
+class PlanResponse(BaseModel):
+    day_plan: DayPlanResponse | None = None
+    message: str = ""
+    error: str = ""
+
+
 class ErrorResponse(BaseModel):
     error: str
     detail: str = ""
@@ -110,6 +167,54 @@ runner = InMemoryRunner(agent=orchestrator, app_name=settings.app_name)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _try_parse_plan_from_text(text: str) -> dict | None:
+    """Try extracting a JSON plan from the Presenter's text output."""
+    # Strip markdown code fences
+    match = re.search(r"```(?:json)?\s*({.*?})\s*```", text, re.DOTALL)
+    json_str = match.group(1) if match else text.strip()
+
+    try:
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError:
+        return None
+
+    # Handle nested structures — look for the plan dict
+    if "stops" in parsed:
+        return parsed
+    if "day_plan_summary" in parsed:
+        return parsed.get("day_plan_summary")
+    if "itinerary" in parsed:
+        # Convert simplified itinerary format to our stop format
+        stops = []
+        for i, item in enumerate(parsed.get("itinerary", [])):
+            stops.append({
+                "order": item.get("stop_number", i + 1),
+                "place": {
+                    "name": item.get("name", "Unknown"),
+                    "category": "place",
+                    "rating": 0,
+                    "price_level": 2,
+                    "address": "",
+                    "lat": 0, "lng": 0,
+                    "source": "agent_text",
+                },
+                "arrival_time": item.get("time", ""),
+                "departure_time": "",
+                "duration_minutes": 60,
+                "travel_to_next": None,
+                "notes": item.get("reason", ""),
+            })
+        return {
+            "date": "",
+            "stops": stops,
+            "total_travel_time": 0,
+            "estimated_total_cost": parsed.get("estimated_cost", ""),
+            "weather_contingency": "",
+            "back_at_hotel_by": parsed.get("return_time", ""),
+        }
+    return None
 
 
 def _profile_to_state_dict(profile: ProfilePayload, session_id: str) -> dict:
@@ -193,6 +298,18 @@ def _transform_plan_for_frontend(plan: dict) -> dict:
             "notes": stop.get("notes", ""),
         })
 
+    # Generate Google Maps multi-stop directions URL
+    hotel_lat = settings.hotel_lat
+    hotel_lng = settings.hotel_lng
+    waypoints = [f"{hotel_lat},{hotel_lng}"]
+    for stop in transformed_stops:
+        place = stop.get("place", {})
+        lat_lng = place.get("lat_lng", [0, 0])
+        if lat_lng and lat_lng != [0, 0] and lat_lng != [0.0, 0.0]:
+            waypoints.append(f"{lat_lng[0]},{lat_lng[1]}")
+    waypoints.append(f"{hotel_lat},{hotel_lng}")  # return to hotel
+    map_url = "https://www.google.com/maps/dir/" + "/".join(waypoints)
+
     return {
         "date": plan.get("date", ""),
         "stops": transformed_stops,
@@ -200,7 +317,7 @@ def _transform_plan_for_frontend(plan: dict) -> dict:
         "estimated_total_cost": plan.get("estimated_total_cost", ""),
         "weather_contingency": plan.get("weather_contingency", ""),
         "back_at_hotel_by": plan.get("back_at_hotel_by", ""),
-        "map_url": plan.get("map_url"),
+        "map_url": map_url,
     }
 
 
@@ -252,6 +369,9 @@ async def create_plan(
         f"discover places, build a route, and present the day plan."
     )
 
+    logger.info("Using hotel address: %s (lat=%s, lng=%s)", settings.hotel_address, settings.hotel_lat, settings.hotel_lng)
+    logger.info("Profile summary sent to agents: %s", profile_summary[:200])
+
     message = types.UserContent(parts=[types.Part(text=profile_summary)])
 
     try:
@@ -301,10 +421,20 @@ async def create_plan(
             session_id=session.id,
         )
 
+        # Debug: log all state keys
+        if session:
+            logger.info("Session state keys after run: %s", list(session.state.keys()))
+
         plan = session.state.get(KEY_CURRENT_PLAN) if session else None
 
+        # Fallback: try to parse JSON from the last text output
+        if not plan and last_text:
+            plan = _try_parse_plan_from_text(last_text)
+            if plan:
+                logger.info("Extracted plan from text output (fallback)")
+
         if not plan:
-            logger.warning("No current_plan in session state after run")
+            logger.warning("No current_plan found after run")
             return {
                 "day_plan": None,
                 "message": last_text,

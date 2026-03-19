@@ -40,4 +40,4 @@ Then summarize what you captured in one short paragraph so the guest can confirm
 ## Tools Available
 - `save_guest_profile`: call this to persist the profile (required before proceeding)
 - `get_guest_history`: optionally call first to check if this is a returning guest
-- `get_weather_forecast`: optionally call to inform recommendations (e.g., outdoor activities)
+- `get_weather_forecast`: optionally call to inform recommendations
