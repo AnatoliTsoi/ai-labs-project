@@ -1,0 +1,75 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--color-bg-primary);
+}
+
+.app__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Itinerary view ── */
+.app__itinerary {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-6);
+  animation: fadeInUp var(--duration-slow) var(--ease-out);
+}
+
+.app__itinerary-inner {
+  max-width: var(--max-chat-width);
+  margin: 0 auto;
+  background: var(--neutral-white);
+  border: 1px solid var(--neutral-warm-gray-2);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Error banner ── */
+.app__error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--fn-error-light);
+  color: var(--fn-error);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  animation: fadeIn var(--duration-normal) var(--ease-out);
+}
+
+.app__error button {
+  background: transparent;
+  border: 1px solid var(--fn-error);
+  color: var(--fn-error);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.app__error button:hover {
+  background: var(--fn-error);
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .app__itinerary {
+    padding: var(--space-3);
+  }
+
+  .app__itinerary-inner {
+    padding: var(--space-4);
+    border-radius: var(--radius-xl);
+  }
+}

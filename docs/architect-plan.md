@@ -5,21 +5,30 @@ Requirements Restatement
 
 Build a multi-agent AI concierge system for a hotel company using Google Agent Development Kit (ADK) that:
 
-1. Greets guests post-arrival and collects preferences (dietary restrictions, interests, mobility, budget, pace)
+1. Collects guest preferences via a guided questionnaire UI (dietary restrictions, interests, budget, pace, party, time window)
 2. Discovers local places & activities using Google Maps Platform + Search APIs
 3. Builds optimized day routes with time-aware sequencing and travel logistics
-4. Optionally handles bookings (reservations, tickets) via partner APIs
-5. Iterates collaboratively with the guest until they're satisfied with their day plan
-6. Runs as a loop — propose → refine → confirm — until the guest says "looks great"
+4. Presents the itinerary in a rich interactive frontend (timeline, map, ratings)
+5. Allows iterative refinement — the guest can approve or request changes
+6. Optionally handles bookings (reservations, tickets) via partner APIs — Phase 2
+
+Note: The frontend is a React (Vite + Bun) guided questionnaire that builds a structured GuestProfile via button-based steps, NOT a free-form chat. The profile is submitted to the ADK backend as a single JSON payload. See api-contracts.md for the exact data shapes.
 
   ---
 1. System Architecture Overview
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        GUEST INTERFACE LAYER                        │
-│         (WhatsApp / Hotel App / Web Chat / In-Room Tablet)          │
+│                     REACT FRONTEND (Vite + Bun)                     │
+│                                                                     │
+│  ┌──────────────┐   ┌──────────────────┐   ┌───────────────────┐   │
+│  │ Questionnaire│──▶│  Loading Screen   │──▶│  Itinerary View   │   │
+│  │ (6 steps)    │   │                   │   │  (DayPlanView)    │   │
+│  │ Builds       │   │  Crafting your    │   │  Timeline, map,   │   │
+│  │ GuestProfile │   │  perfect day...   │   │  approve/change   │   │
+│  └──────────────┘   └──────────────────┘   └───────────────────┘   │
 └──────────────────────────────┬──────────────────────────────────────┘
-│ A2A Protocol / REST
+│ POST /plan {profile}     (REST)
+│ POST /plan/feedback      (Phase 2)
 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    CONCIERGE ORCHESTRATOR (LoopAgent)                │
@@ -28,17 +37,16 @@ Build a multi-agent AI concierge system for a hotel company using Google Agent D
 │  │ INTAKE    │──▶│  DISCOVERY    │──▶│  ROUTE   │──▶│ PRESENTER │ │
 │  │ AGENT     │   │  AGENT        │   │  PLANNER │   │ AGENT     │ │
 │  │           │   │ (Parallel)    │   │  AGENT   │   │           │ │
-│  │ Collects  │   │ ┌───────────┐ │   │          │   │ Formats & │ │
-│  │ prefs,    │   │ │Places API │ │   │ Builds   │   │ presents  │ │
-│  │ context,  │   │ │Search API │ │   │ optimal  │   │ the plan, │ │
-│  │ constraints│  │ │Events API │ │   │ day      │   │ asks for  │ │
-│  │           │   │ └───────────┘ │   │ route    │   │ feedback  │ │
+│  │ Receives  │   │ ┌───────────┐ │   │          │   │ Returns   │ │
+│  │ structured│   │ │Places API │ │   │ Builds   │   │ DayPlan   │ │
+│  │ profile   │   │ │Search API │ │   │ optimal  │   │ as JSON   │ │
+│  │ from UI   │   │ │Events API │ │   │ day      │   │ to the    │ │
+│  │           │   │ └───────────┘ │   │ route    │   │ frontend  │ │
 │  └───────────┘   └───────────────┘   └──────────┘   └─────┬─────┘ │
 │                                                            │       │
 │       ┌────────────────────────────────────────────────────┘       │
-│       │  Guest says "change X" → loop back to relevant agent       │
-│       │  Guest says "book it"  → trigger Booking Agent             │
-│       │  Guest says "looks great" → exit loop, deliver final plan  │
+│       │  User taps "Make changes" → loop back to relevant agent    │
+│       │  User taps "Looks great!" → exit loop, return final plan   │
 │       ▼                                                            │
 │  ┌───────────┐                                                     │
 │  │ BOOKING   │  (Optional — Phase 2)                               │
@@ -63,7 +71,8 @@ Google ADK provides these orchestration primitives — here's how they map:
 │ LoopAgent       │ Concierge             │ Wraps the full cycle: intake → discover → route → present → feedback. Loops until guest confirms or max         │
 │                 │ Orchestrator          │ iterations.                                                                                                     │
 ├─────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
-│ LlmAgent        │ Intake Agent          │ Conversational preference collection. Uses Gemini to conduct natural dialogue. Outputs structured GuestProfile. │
+│ LlmAgent        │ Intake Agent          │ Receives structured GuestProfile from the frontend questionnaire UI. Enriches with server-side context           │
+│                 │                       │ (hotel location, PMS data, weather). No conversational collection — the UI handles that.                         │
 ├─────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ ParallelAgent   │ Discovery Agent       │ Fans out to Places API, Google Search, and Events sources simultaneously. Merges results.                       │
 ├─────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
@@ -94,11 +103,21 @@ presenter_agent,       # Step 4: Present & get feedback
 
 3.1 Intake Agent (LlmAgent)
 
-Purpose: Warm, conversational preference gathering — not a form.
+Purpose: Receive the structured GuestProfile submitted by the frontend questionnaire, enrich it with server-side context, and persist it to session state.
 
-Inputs: Guest name (from PMS), check-in data, previous stay history (if returning guest)
+Design Change: The original plan called for conversational preference gathering via Gemini. We've moved preference collection to a guided button-based UI in the React frontend. This gives a faster, more predictable UX and eliminates the risk of Gemini misinterpreting free-form answers. The Intake Agent now focuses on enrichment rather than collection.
 
-Outputs (structured via Pydantic):
+Inputs: Structured JSON payload from frontend (see api-contracts.md):
+{
+  "interests": ["art", "food"],
+  "dietary_restrictions": ["vegan"],
+  "pace": "moderate",
+  "budget_level": "luxury",
+  "party_composition": "couple",
+  "time_available": { "start_time": "09:00", "end_time": "21:00" }
+}
+
+Outputs (structured via Pydantic — same model as before):
 @dataclass(frozen=True)
 class GuestProfile:
 guest_id: str
@@ -113,9 +132,11 @@ location_context: str                    # hotel address for proximity calculati
 special_requests: tuple[str, ...]        # free-form notes
 
 Key Design Decisions:
+- Frontend collects: interests, dietary_restrictions, pace, budget_level, party_composition, time_available
+- Backend fills in: guest_id (from session), mobility (defaults to "full"), location_context (from hotel config), special_requests (empty)
 - Uses session.state to persist profile across loop iterations
-- On re-entry (loop iteration 2+), only asks about changes — doesn't re-interview
-- Warm tone calibrated to hotel brand voice via system prompt
+- On re-entry (loop iteration 2+), merges feedback changes into existing profile
+- ["none"] dietary_restrictions from frontend → empty tuple on backend
 
 Tools:
 - get_guest_history — fetches PMS (Property Management System) data
@@ -205,12 +226,14 @@ Tools:
 
 3.4 Presenter Agent (LlmAgent)
 
-Purpose: The "face" of the concierge. Presents the plan conversationally and interprets feedback.
+Purpose: Serializes the DayPlan as structured JSON for the React frontend to render. Also classifies guest feedback from the UI into loop-control actions.
+
+Design Change: The original plan had the Presenter write narrative text. Since the frontend now renders a rich interactive timeline (ItineraryCards, map links, stats bar), the Presenter returns structured JSON (DayPlan) rather than prose. The frontend handles all visual formatting. See api-contracts.md for the exact response schema.
 
 Key Behaviors:
-- Presents plan as a narrative, not a data dump ("Your morning starts with a leisurely breakfast at...")
-- Proactively highlights trade-offs ("I chose X over Y because of your dietary needs — want me to swap?")
-- Classifies guest feedback into actions:
+- Returns DayPlan as JSON (stops, travel segments, costs, weather contingency, map URL)
+- Fills in the `notes` field per stop with Gemini-generated tips ("Ask for the terrace seating")
+- On feedback (Phase 2), classifies the user action into:
 
 @dataclass(frozen=True)
 class FeedbackAction:
@@ -225,8 +248,8 @@ Loop Control Logic:
 - "restart" → loop back to Intake
 
 Tools:
-- format_itinerary — renders plan in channel-appropriate format (rich text, map link, PDF)
 - generate_map_url — creates a shareable Google Maps multi-stop URL
+- generate_stop_notes — Gemini-generated per-stop tips and recommendations
 
 3.5 Booking Agent (SequentialAgent) — Phase 2
 
@@ -250,7 +273,7 @@ Google ADK uses session.state (dict-like) for cross-agent communication within a
 
 # State schema (immutable updates via spread)
 STATE_KEYS = {
-"guest_profile": GuestProfile,          # Set by Intake
+"guest_profile": GuestProfile,          # Set by Intake (from frontend JSON)
 "discovered_options": list[DiscoveredOption],  # Set by Discovery
 "current_plan": DayPlan,                # Set by Route Planner
 "plan_approved": bool,                  # Set by Presenter (loop exit condition)
@@ -447,20 +470,24 @@ Phase 1: Foundation (Weeks 1-3) — MVP
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
 │ 1.1  │ Project scaffold, config, models (frozen dataclasses)      │ Low        │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.2  │ Intake Agent with mock PMS data                            │ Medium     │
+│ 1.2  │ React frontend — questionnaire UI + itinerary view (DONE)  │ Medium     │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.3  │ Discovery Agent — Places API integration + scoring         │ High       │
+│ 1.3  │ REST API wrapper (FastAPI) — POST /plan endpoint           │ Medium     │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.4  │ Route Planner Agent — basic sequencing (no Routes API yet) │ Medium     │
+│ 1.4  │ Intake Agent — receive profile JSON, enrich, set state     │ Low        │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.5  │ Presenter Agent — markdown output + feedback parsing       │ Medium     │
+│ 1.5  │ Discovery Agent — Places API integration + scoring         │ High       │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.6  │ Orchestrator (LoopAgent) wiring — full loop works          │ Medium     │
+│ 1.6  │ Route Planner Agent — basic sequencing (no Routes API yet) │ Medium     │
 ├──────┼────────────────────────────────────────────────────────────┼────────────┤
-│ 1.7  │ Unit + integration tests (80%+ coverage)                   │ Medium     │
+│ 1.7  │ Presenter Agent — DayPlan JSON output for frontend         │ Medium     │
+├──────┼────────────────────────────────────────────────────────────┼────────────┤
+│ 1.8  │ Orchestrator (LoopAgent) wiring — full loop works          │ Medium     │
+├──────┼────────────────────────────────────────────────────────────┼────────────┤
+│ 1.9  │ Unit + integration tests (80%+ coverage)                   │ Medium     │
 └──────┴────────────────────────────────────────────────────────────┴────────────┘
 
-Exit criteria: Guest can chat → get preferences collected → see discovered places → receive a day plan → refine → approve. All via ADK dev UI (adk web).
+Exit criteria: Guest fills out questionnaire → frontend submits profile JSON → backend discovers places → builds day plan → returns DayPlan JSON → frontend renders interactive itinerary → guest can approve.
 
 Phase 2: Production Hardening (Weeks 4-5)
 
@@ -482,19 +509,19 @@ Phase 2: Production Hardening (Weeks 4-5)
 │ 2.7  │ Structured logging + observability                     │ Low        │
 └──────┴────────────────────────────────────────────────────────┴────────────┘
 
-Phase 3: Channel Integration (Weeks 6-7)
+Phase 3: Additional Channels (Weeks 6-7)
 
-┌──────┬────────────────────────────────────┬────────────┐
-│ Step │            Deliverable             │ Complexity │
-├──────┼────────────────────────────────────┼────────────┤
-│ 3.1  │ REST API wrapper for ADK (FastAPI) │ Medium     │
-├──────┼────────────────────────────────────┼────────────┤
-│ 3.2  │ WhatsApp Business API integration  │ High       │
-├──────┼────────────────────────────────────┼────────────┤
-│ 3.3  │ Hotel app WebSocket integration    │ Medium     │
-├──────┼────────────────────────────────────┼────────────┤
-│ 3.4  │ In-room tablet UI (web)            │ Medium     │
-└──────┴────────────────────────────────────┴────────────┘
+┌──────┬─────────────────────────────────────────────┬────────────┐
+│ Step │                 Deliverable                  │ Complexity │
+├──────┼─────────────────────────────────────────────┼────────────┤
+│ 3.1  │ WhatsApp Business API integration            │ High       │
+├──────┼─────────────────────────────────────────────┼────────────┤
+│ 3.2  │ Hotel app WebSocket integration              │ Medium     │
+├──────┼─────────────────────────────────────────────┼────────────┤
+│ 3.3  │ In-room tablet UI (reuse React frontend)    │ Low        │
+└──────┴─────────────────────────────────────────────┴────────────┘
+
+Note: REST API and React frontend are already built in Phase 1. Phase 3 focuses on additional distribution channels.
 
 Phase 4: Booking & Revenue (Weeks 8-10)
 

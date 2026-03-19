@@ -1,0 +1,95 @@
+.loading-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  animation: fadeIn var(--duration-slow) var(--ease-out);
+}
+
+.loading-screen__content {
+  text-align: center;
+  max-width: 400px;
+}
+
+.loading-screen__logo {
+  margin-bottom: var(--space-6);
+  animation: float 2.5s ease-in-out infinite;
+}
+
+.loading-screen__img {
+  opacity: 0.9;
+}
+
+.loading-screen__spinner {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-6);
+}
+
+.loading-screen__ring {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--neutral-warm-gray-2);
+  border-top-color: var(--brand-coral);
+  border-radius: var(--radius-full);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-screen__title {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--brand-purple);
+  margin-bottom: var(--space-2);
+}
+
+.loading-screen__text {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: var(--space-8);
+}
+
+/* ── Progress steps ── */
+.loading-screen__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  text-align: left;
+}
+
+.loading-screen__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+
+.loading-screen__step--done {
+  color: var(--fn-success);
+}
+
+.loading-screen__step--active {
+  color: var(--brand-coral);
+  background: var(--brand-light-pink-40);
+  font-weight: 500;
+}
+
+.loading-screen__step--active .loading-screen__step-icon {
+  animation: spin 1.5s linear infinite;
+  display: inline-block;
+}
+
+.loading-screen__step-icon {
+  width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
