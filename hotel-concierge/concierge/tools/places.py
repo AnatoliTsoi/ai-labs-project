@@ -5,15 +5,19 @@ Uses the Places API (New) REST endpoints:
 - GET  https://places.googleapis.com/v1/places/{place_id}
 """
 
+import asyncio
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+def _get_api_key() -> str:
+    return os.environ.get("GOOGLE_API_KEY", "")
 
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places"
@@ -109,7 +113,7 @@ def search_nearby_places(
             _TEXT_SEARCH_URL,
             json=body,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": _FIELD_MASK,
                 "Content-Type": "application/json",
             },
@@ -148,7 +152,7 @@ def get_place_details(
         resp = httpx.get(
             url,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": _DETAILS_FIELD_MASK,
                 "Content-Type": "application/json",
             },
@@ -185,3 +189,80 @@ def save_discovered_options(
     """
     tool_context.state["discovered_options"] = options
     return f"Saved {len(options)} discovered options to session."
+
+
+def _search_single(query: str, lat: float, lng: float, radius: int) -> list[dict]:
+    """Run a single text search (blocking). Used by batch_search_places."""
+    body = {
+        "textQuery": query.strip(),
+        "locationBias": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": float(radius),
+            }
+        },
+        "maxResultCount": 5,
+        "languageCode": "en",
+    }
+    try:
+        resp = httpx.post(
+            _TEXT_SEARCH_URL,
+            json=body,
+            headers={
+                "X-Goog-Api-Key": _get_api_key(),
+                "X-Goog-FieldMask": _FIELD_MASK,
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        places = [_parse_place(p) for p in data.get("places", [])]
+        logger.info("Places API returned %d results for '%s'", len(places), query.strip())
+        return places
+    except Exception as e:
+        logger.error("Places batch search failed for '%s': %s", query.strip(), e)
+        return []
+
+
+def batch_search_places(
+    queries: str,
+    latitude: float,
+    longitude: float,
+    radius_meters: int = 5000,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Search for multiple types of places in parallel (much faster).
+
+    Args:
+        queries: Comma-separated search queries, e.g. "vegan restaurant, art museum, park, cocktail bar".
+        latitude: Search center latitude.
+        longitude: Search center longitude.
+        radius_meters: Search radius in meters (default 5000).
+
+    Returns:
+        Dict with "all_places" list of all results combined.
+    """
+    query_list = [q.strip() for q in queries.split(",") if q.strip()]
+    logger.info("Batch searching %d queries in parallel: %s", len(query_list), query_list)
+
+    all_places = []
+    with ThreadPoolExecutor(max_workers=min(len(query_list), 6)) as executor:
+        futures = [
+            executor.submit(_search_single, q, latitude, longitude, radius_meters)
+            for q in query_list
+        ]
+        for future in futures:
+            all_places.extend(future.result())
+
+    # Deduplicate by place_id
+    seen = set()
+    unique = []
+    for p in all_places:
+        if p["place_id"] not in seen:
+            seen.add(p["place_id"])
+            unique.append(p)
+
+    logger.info("Batch search complete: %d unique places from %d queries", len(unique), len(query_list))
+    return {"all_places": unique, "count": len(unique), "status": "ok"}
+

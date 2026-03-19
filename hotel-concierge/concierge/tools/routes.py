@@ -12,7 +12,9 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+def _get_api_key() -> str:
+    return os.environ.get("GOOGLE_API_KEY", "")
 
 _COMPUTE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
@@ -70,7 +72,7 @@ def compute_route(
             _COMPUTE_ROUTES_URL,
             json=body,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": _FIELD_MASK,
                 "Content-Type": "application/json",
             },
@@ -172,7 +174,7 @@ def check_opening_hours(
         resp = httpx.get(
             url,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": "currentOpeningHours",
                 "Content-Type": "application/json",
             },
