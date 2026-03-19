@@ -12,7 +12,7 @@ def build_presenter_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="presenter_agent",
-        model=settings.gemini_model,
+        model=settings.agent_model(settings.presenter_model),
         description=(
             "Presents the day plan conversationally, interprets guest feedback, "
             "and controls the refinement loop (approve to exit, or route back)."
