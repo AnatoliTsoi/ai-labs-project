@@ -27,9 +27,16 @@ class Settings(BaseSettings):
     routes_cache_ttl_seconds: int = 900
     place_details_cache_ttl_seconds: int = 86400
 
-    # ADK model
-    gemini_model: str = "gemini-2.0-flash"
+    # ADK models
+    gemini_model: str = "gemini-2.5-flash"
+    intake_model: str = "gemini-2.5-flash"
+    discovery_model: str = "gemini-2.5-flash"
+    route_planner_model: str = "gemini-2.5-flash"
+    presenter_model: str = "gemini-2.5-flash"
     max_loop_iterations: int = 5
+
+    def agent_model(self, override: str) -> str:
+        return override or self.gemini_model
 
 
 _settings: Settings | None = None

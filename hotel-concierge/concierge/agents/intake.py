@@ -20,7 +20,7 @@ def build_intake_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="intake_agent",
-        model=settings.gemini_model,
+        model=settings.agent_model(settings.intake_model),
         description=(
             "Collects guest preferences through warm conversation. "
             "Outputs a structured GuestProfile to session state."
