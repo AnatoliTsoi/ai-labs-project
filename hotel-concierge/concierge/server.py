@@ -18,7 +18,7 @@ from google.genai import types
 
 from concierge.agents.orchestrator import build_concierge_orchestrator
 from concierge.config.settings import get_settings
-from concierge.tools.state_tools import KEY_CURRENT_PLAN, KEY_GUEST_PROFILE
+from concierge.tools.state_tools import KEY_CURRENT_PLAN
 
 logger = logging.getLogger(__name__)
 
@@ -111,32 +111,45 @@ def _transform_plan_for_frontend(plan: dict) -> dict:
     - Frontend TravelSegment uses `distance_km` (float)
     - Backend place uses `lat`/`lng` → frontend expects `lat_lng` tuple
     - Frontend expects fields like `dietary_compatibility`, `interest_match`, etc.
+
+    This function is pure — it never mutates the input dict.
     """
     transformed_stops = []
     for stop in plan.get("stops", []):
-        place = stop.get("place", {})
+        raw_place = stop.get("place", {})
 
-        # Normalise lat/lng to lat_lng tuple
-        if "lat_lng" not in place and "lat" in place:
-            place["lat_lng"] = [place.pop("lat", 0), place.pop("lng", 0)]
+        # Normalise lat/lng to lat_lng tuple — build new dict, never mutate original
+        if "lat_lng" not in raw_place and "lat" in raw_place:
+            lat_lng = [raw_place.get("lat", 0), raw_place.get("lng", 0)]
+        else:
+            lat_lng = raw_place.get("lat_lng", [0, 0])
 
-        # Ensure frontend-expected fields have defaults
-        place.setdefault("dietary_compatibility", 0.8)
-        place.setdefault("interest_match", 0.8)
-        place.setdefault("travel_time_from_hotel", 10)
-        place.setdefault("booking_available", False)
-        place.setdefault("source", "places_api")
+        place = {
+            **{k: v for k, v in raw_place.items() if k not in ("lat", "lng")},
+            "lat_lng": lat_lng,
+            "dietary_compatibility": raw_place.get("dietary_compatibility", 0.8),
+            "interest_match": raw_place.get("interest_match", 0.8),
+            "travel_time_from_hotel": raw_place.get("travel_time_from_hotel", 10),
+            "booking_available": raw_place.get("booking_available", False),
+            "source": raw_place.get("source", "places_api"),
+        }
 
-        # Transform travel segment
-        travel = stop.get("travel_to_next")
-        if travel and "distance_meters" in travel:
-            travel["distance_km"] = round(travel.pop("distance_meters") / 1000, 1)
-
-        # Map backend mode names to frontend names
-        if travel and travel.get("mode") == "walk":
-            travel["mode"] = "walking"
-        if travel and travel.get("mode") == "drive":
-            travel["mode"] = "driving"
+        # Transform travel segment — build new dict
+        raw_travel = stop.get("travel_to_next")
+        if raw_travel is None:
+            travel = None
+        else:
+            raw_mode = raw_travel.get("mode", "")
+            mode = {"walk": "walking", "drive": "driving"}.get(raw_mode, raw_mode)
+            if "distance_meters" in raw_travel:
+                distance_km = round(raw_travel["distance_meters"] / 1000, 1)
+            else:
+                distance_km = raw_travel.get("distance_km", 0.0)
+            travel = {
+                "mode": mode,
+                "duration_minutes": raw_travel.get("duration_minutes", 0),
+                "distance_km": distance_km,
+            }
 
         transformed_stops.append({
             "order": stop.get("order", 0),
@@ -199,12 +212,11 @@ async def create_plan(
     message = types.UserContent(parts=[types.Part(text=profile_summary)])
 
     try:
-        # Create session with pre-seeded guest profile in state
+        # Session state is populated by the intake agent via save_guest_profile
         session = await runner.session_service.create_session(
             app_name=settings.app_name,
             user_id=user_id,
             session_id=session_id,
-            state={KEY_GUEST_PROFILE: profile_dict},
         )
 
         # Run the full orchestrator loop
