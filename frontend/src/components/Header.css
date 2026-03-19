@@ -25,6 +25,7 @@
 
 .header__logo {
   flex-shrink: 0;
+  margin-bottom: -0.7rem;
   animation: scaleIn var(--duration-slow) var(--ease-out);
 }
 
@@ -35,9 +36,8 @@
 
 .header__title {
   font-family: var(--font-display);
-  font-size: var(--text-lg);
+  font-size: 2rem;
   font-weight: 700;
-  line-height: 1.2;
   color: var(--brand-purple);
 }
 

@@ -15,7 +15,6 @@ export function Header() {
           </div>
           <div className="header__text">
             <h1 className="header__title">Concierge</h1>
-            <span className="header__subtitle">AI Travel Companion</span>
           </div>
         </div>
 
