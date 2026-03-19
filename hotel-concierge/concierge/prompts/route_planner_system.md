@@ -20,7 +20,10 @@ Build an optimal day plan that:
 5. Verify opening hours for each stop's planned arrival time
 6. Once all stops are finalised, call `generate_map_url_from_stops_dict` with the stops
    list and hotel coordinates to produce a shareable Google Maps URL
-7. Build the day plan structure (including the `map_url` field) and call `save_day_plan`
+7. Build the complete day plan dict (including the `map_url` field from step 6)
+8. **REQUIRED — you MUST call `save_day_plan(plan_dict)` before finishing.**
+   Do not produce any text response until after `save_day_plan` has been called.
+   The pipeline will fail silently if you skip this step.
 
 ## Day Plan Structure (as JSON dict)
 ```json
