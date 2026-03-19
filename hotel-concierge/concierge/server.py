@@ -1,7 +1,9 @@
 """FastAPI REST server — bridges the React frontend to the ADK orchestrator."""
 
+import asyncio
 import logging
 import uuid
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -193,10 +195,13 @@ async def create_plan(
 
     profile_dict = _profile_to_state_dict(body.profile, session_id)
 
+    today = date.today().isoformat()
+
     # Build a message that tells the agents the profile is already collected
     profile_summary = (
         f"The guest has already completed the questionnaire. "
         f"Here is their profile:\n"
+        f"Date: {today}\n"
         f"Interests: {', '.join(profile_dict['interests'])}\n"
         f"Dietary restrictions: {', '.join(profile_dict['dietary_restrictions']) or 'none'}\n"
         f"Pace: {profile_dict['pace']}\n"
@@ -219,17 +224,27 @@ async def create_plan(
             session_id=session_id,
         )
 
-        # Run the full orchestrator loop
+        # Run the full orchestrator loop with a hard deadline
         last_text = ""
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=message,
-        ):
-            if event.content and event.content.parts:
-                for part in event.content.parts:
-                    if part.text:
-                        last_text = part.text
+        try:
+            async with asyncio.timeout(settings.request_timeout_seconds):
+                async for event in runner.run_async(
+                    user_id=user_id,
+                    session_id=session.id,
+                    new_message=message,
+                ):
+                    if event.content and event.content.parts:
+                        for part in event.content.parts:
+                            if part.text:
+                                last_text = part.text
+        except TimeoutError:
+            logger.error(
+                "Orchestrator timed out after %ds", settings.request_timeout_seconds
+            )
+            raise HTTPException(
+                status_code=504,
+                detail=f"Plan generation timed out after {settings.request_timeout_seconds}s",
+            )
 
         # Re-fetch session to get the latest state after the run
         session = await runner.session_service.get_session(
