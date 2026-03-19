@@ -1,8 +1,11 @@
 """FastAPI REST server — bridges the React frontend to the ADK orchestrator."""
 
+import asyncio
+import datetime
 import json
 import logging
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -16,6 +19,7 @@ from concierge.config.settings import reset_settings
 reset_settings()
 
 import tenacity
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -28,8 +32,20 @@ from concierge.agents.orchestrator import build_concierge_orchestrator
 from concierge.config.settings import get_settings
 from concierge.tools.state_tools import KEY_CURRENT_PLAN, KEY_GUEST_PROFILE
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Force our log format onto the root logger after uvicorn is done with its setup."""
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for handler in root.handlers:
+        handler.setFormatter(fmt)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(fmt)
+        root.addHandler(handler)
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
@@ -115,7 +131,17 @@ class ErrorResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 settings = get_settings()
-app = FastAPI(title=f"{settings.hotel_name} Concierge API")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _configure_logging()
+    logger.info("Concierge API starting up — hotel: %s", settings.hotel_name)
+    yield
+    logger.info("Concierge API shut down.")
+
+
+app = FastAPI(title=f"{settings.hotel_name} Concierge API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -211,6 +237,25 @@ def _profile_to_state_dict(profile: ProfilePayload, session_id: str) -> dict:
     }
 
 
+def _log_adk_event(event, elapsed: float) -> None:
+    """Log ADK pipeline events in a structured, readable format."""
+    author = getattr(event, "author", "unknown")
+    content = getattr(event, "content", None)
+    if not content or not content.parts:
+        return
+    for part in content.parts:
+        if getattr(part, "function_call", None):
+            fc = part.function_call
+            args_preview = str(fc.args)[:80]
+            logger.info("[%5.1fs] %-25s ▶ TOOL CALL  %s(%s)", elapsed, author, fc.name, args_preview)
+        elif getattr(part, "function_response", None):
+            fr = part.function_response
+            resp_preview = str(fr.response)[:80]
+            logger.info("[%5.1fs] %-25s ◀ TOOL RESP  %s → %s", elapsed, author, fr.name, resp_preview)
+        elif getattr(part, "text", None):
+            logger.info("[%5.1fs] %-25s TEXT  %s", elapsed, author, part.text[:120])
+
+
 def _transform_plan_for_frontend(plan: dict) -> dict:
     """Adapt the backend DayPlan shape to match what the frontend expects.
 
@@ -299,27 +344,21 @@ async def create_plan(
     user_id = f"user-{uuid.uuid4().hex[:8]}"
 
     profile_dict = _profile_to_state_dict(body.profile, session_id)
+    today = datetime.date.today().isoformat()
 
-    # Build a message that tells the agents the profile is already collected
-    profile_summary = (
-        f"The guest has already completed the questionnaire. "
-        f"Here is their profile:\n"
-        f"Interests: {', '.join(profile_dict['interests'])}\n"
-        f"Dietary restrictions: {', '.join(profile_dict['dietary_restrictions']) or 'none'}\n"
-        f"Pace: {profile_dict['pace']}\n"
-        f"Budget: {profile_dict['budget_level']}\n"
-        f"Party: {profile_dict['party_composition']}\n"
-        f"Time: {profile_dict['time_available']['start_time']} – "
-        f"{profile_dict['time_available']['end_time']}\n"
-        f"Hotel location: {settings.hotel_address}\n\n"
-        f"Please save this profile using save_guest_profile, then proceed to "
-        f"discover places, build a route, and present the day plan."
+    logger.info(
+        "POST /plan  session=%s  interests=%s  pace=%s  budget=%s",
+        session_id[:16], profile_dict["interests"], profile_dict["pace"], profile_dict["budget_level"],
     )
-
     logger.info("Using hotel address: %s (lat=%s, lng=%s)", settings.hotel_address, settings.hotel_lat, settings.hotel_lng)
-    logger.info("Profile summary sent to agents: %s", profile_summary[:200])
 
-    message = types.UserContent(parts=[types.Part(text=profile_summary)])
+    # Guest profile is pre-seeded into session state — no intake agent needed
+    trigger_message = (
+        f"Today is {today}. "
+        f"The guest profile is already saved in session state. "
+        f"Please discover places and build a day plan for the guest."
+    )
+    message = types.UserContent(parts=[types.Part(text=trigger_message)])
 
     def _is_retryable(exc: BaseException) -> bool:
         return isinstance(exc, genai_errors.ServerError) and exc.code >= 500
@@ -352,6 +391,7 @@ async def create_plan(
                             app_name=settings.app_name,
                             user_id=user_id,
                             session_id=attempt_session_id,
+                            state={KEY_GUEST_PROFILE: profile_dict},
                         )
                         last_text = ""
                         async for event in runner.run_async(

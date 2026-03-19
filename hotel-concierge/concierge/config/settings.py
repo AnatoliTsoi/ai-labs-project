@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # ADK model
     gemini_model: str = "gemini-2.5-flash"
     max_loop_iterations: int = 5
+    request_timeout_seconds: int = 300
 
     def agent_model(self, override: str) -> str:
         return override or self.gemini_model

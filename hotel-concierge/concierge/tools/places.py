@@ -266,3 +266,31 @@ def batch_search_places(
     logger.info("Batch search complete: %d unique places from %d queries", len(unique), len(query_list))
     return {"all_places": unique, "count": len(unique), "status": "ok"}
 
+
+def search_and_save_places(
+    queries: str,
+    latitude: float,
+    longitude: float,
+    radius_meters: int = 5000,
+    tool_context: ToolContext = None,
+) -> dict:
+    """Search for places and immediately save all results to session state.
+
+    Combines batch_search_places + save_discovered_options in one call,
+    eliminating the need for a second LLM round-trip to pass results.
+
+    Args:
+        queries: Comma-separated search queries, e.g. "vegan restaurant, art museum, park".
+        latitude: Search center latitude.
+        longitude: Search center longitude.
+        radius_meters: Search radius in meters (default 5000).
+
+    Returns:
+        Dict with count of saved options and status.
+    """
+    result = batch_search_places(queries, latitude, longitude, radius_meters)
+    places = result.get("all_places", [])
+    tool_context.state["discovered_options"] = places
+    logger.info("Searched and auto-saved %d places from queries: %s", len(places), queries[:120])
+    return {"saved": len(places), "status": "ok"}
+
