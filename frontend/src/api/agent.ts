@@ -145,10 +145,14 @@ export async function submitProfile(
   sessionId: string,
 ): Promise<DayPlan> {
   if (USE_MOCK) {
-    // Simulate agent processing time
+    console.log('[agent] Using MOCK data');
     await new Promise((resolve) => setTimeout(resolve, MOCK_DELAY));
     return mockDayPlan;
   }
+
+  console.log('[agent] Sending profile to', `${API_BASE}/plan`);
+  console.log('[agent] Request payload:', { profile });
+  console.log('[agent] Session ID:', sessionId);
 
   const response = await fetch(`${API_BASE}/plan`, {
     method: 'POST',
@@ -159,11 +163,19 @@ export async function submitProfile(
     body: JSON.stringify({ profile }),
   });
 
+  console.log('[agent] Response status:', response.status);
+
   if (!response.ok) {
+    const errorText = await response.text();
+    console.error('[agent] API error response:', errorText);
     throw new Error(`API error: ${response.status}`);
   }
 
   const data = await response.json();
+  console.log('[agent] Raw response data:', data);
+  console.log('[agent] Day plan:', data.day_plan);
+  console.log('[agent] Stops count:', data.day_plan?.stops?.length ?? 0);
+
   return data.day_plan;
 }
 

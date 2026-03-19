@@ -20,6 +20,7 @@ from concierge.agents.orchestrator import build_concierge_orchestrator
 from concierge.config.settings import get_settings
 from concierge.tools.state_tools import KEY_CURRENT_PLAN, KEY_GUEST_PROFILE
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------

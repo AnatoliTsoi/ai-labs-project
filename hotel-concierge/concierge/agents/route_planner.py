@@ -13,7 +13,7 @@ def build_route_planner_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="route_planner_agent",
-        model=settings.agent_model(settings.route_planner_model),
+        model=settings.gemini_model,
         description=(
             "Transforms discovered options and guest constraints into a time-aware "
             "day itinerary with real travel times between stops."

@@ -11,7 +11,7 @@ def build_presenter_agent() -> LlmAgent:
     settings = get_settings()
     return LlmAgent(
         name="presenter_agent",
-        model=settings.agent_model(settings.presenter_model),
+        model=settings.gemini_model,
         description=(
             "Presents the completed day plan as a clear summary. "
             "Does not collect feedback — this is a one-shot flow."

@@ -13,7 +13,9 @@ from google.adk.tools import ToolContext
 
 logger = logging.getLogger(__name__)
 
-_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+
+def _get_api_key() -> str:
+    return os.environ.get("GOOGLE_API_KEY", "")
 
 _TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 _PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places"
@@ -109,7 +111,7 @@ def search_nearby_places(
             _TEXT_SEARCH_URL,
             json=body,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": _FIELD_MASK,
                 "Content-Type": "application/json",
             },
@@ -148,7 +150,7 @@ def get_place_details(
         resp = httpx.get(
             url,
             headers={
-                "X-Goog-Api-Key": _API_KEY,
+                "X-Goog-Api-Key": _get_api_key(),
                 "X-Goog-FieldMask": _DETAILS_FIELD_MASK,
                 "Content-Type": "application/json",
             },
